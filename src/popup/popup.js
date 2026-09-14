@@ -50,8 +50,14 @@
     }
 
     const busy = st === 'translating' || st === 'scanning';
-    $('mainBtn').textContent = busy ? '停止' : (st === 'done' || (live && live.translated) ? '还原原文' : '翻译此页面');
-    $('mainBtn').className = 'btn btn-block ' + (busy || (st === 'done' || (live && live.translated)) ? 'btn-danger' : 'btn-primary');
+    const hasOutput = st === 'done' || (live && live.translated > 0);
+    let label = '翻译此页面';
+    let danger = false;
+    if (busy) { label = '停止'; danger = true; }
+    else if (st === 'error') { label = hasOutput ? '重试翻译' : '重新翻译'; }
+    else if (hasOutput) { label = '还原原文'; danger = true; }
+    $('mainBtn').textContent = label;
+    $('mainBtn').className = 'btn btn-block ' + (danger ? 'btn-danger' : 'btn-primary');
     $('stopBtn').classList.add('hidden');
 
     const err = live && live.error;
@@ -87,6 +93,14 @@
     if (st === 'translating' || st === 'scanning') {
       await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.STOP }).catch(function () {});
       refresh();
+      return;
+    }
+    if (st === 'error') {
+      // 出错后重试：先清掉可能已存在的半成品译文，再重新开始
+      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {});
+      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
+      $('mainBtn').textContent = '分析中…';
+      setTimeout(refresh, 300);
       return;
     }
     if (st === 'done' || (live && live.translated)) {

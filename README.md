@@ -154,7 +154,7 @@
 零构建、零依赖：所有源码为可直接加载的普通脚本（content script 为经典脚本，后台用 `importScripts`）。
 
 ```bash
-# 运行 46 项单元 / 集成测试（Node 18+，无需安装任何依赖）
+# 运行 57 项单元 / 集成测试（Node 18+，无需安装任何依赖）
 npm test
 
 # 重新生成图标（纯 Node 手写光栅化 + PNG 编码，无第三方库）
@@ -162,7 +162,8 @@ npm run icons
 ```
 
 测试覆盖：文本规范化、缓存键、占位符保护与还原、语言判定、批量打包、并发池、
-LRU 淘汰、提示词构造与三级解析、HTTP 错误分类、以及**完整引擎链路**
+LRU 淘汰、提示词构造与三级解析、HTTP 错误分类、**渲染与插入位置决策**
+（兄弟插入 / 追加内部 / flex 与表格特例 / 排版属性逐条复制），以及**完整引擎链路**
 （去重 / 缓存命中 / 批量 / 429 重试 / 400 拆分 / 401 快停 / 网络失败降级 / 缓存跨实例持久化）。
 
 手工验证页面：`demo/test-page.html`（含标题、链接、列表、表格、代码块、flex 导航、嵌套卡片、
@@ -178,7 +179,7 @@ src/
   popup/    popup.html popup.css popup.js
   options/  options.html options.css options.js
 icons/      16/32/48/128 PNG（由 tools/make-icons.mjs 生成）
-tests/      wpt.test.mjs engine.test.mjs
+tests/      wpt.test.mjs engine.test.mjs render.test.mjs
 demo/       test-page.html
 tools/      make-icons.mjs
 ```

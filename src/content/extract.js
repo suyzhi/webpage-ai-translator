@@ -32,7 +32,7 @@
 
   const MAX_UNITS = 5000;
   const MAX_DEPTH = 80;
-  const INLINE_BLOCK_MIN_TEXT = 24;
+  const INLINE_BLOCK_MIN_TEXT = 20;   // 视觉长度阈值（约 10 个汉字 / 20 个西文字符）
 
   function isHardSkip(el) {
     const tag = el.tagName;
@@ -61,10 +61,11 @@
         d === 'table' || d === 'table-row' || d === 'table-row-group' || d === 'table-header-group' ||
         d === 'table-footer-group' || d === 'table-cell' || d === 'table-caption') return true;
     if (d === 'inline-block' || d === 'inline-flex' || d === 'inline-grid' || d === 'inline-table') {
-      // 卡片式 inline-block：有子元素且文本较长才当作独立块，
+      // 卡片式 inline-block：有子元素且文本足够长才当作独立块，
       // 否则会把导航按钮、徽章切成一堆碎块。
+      // 用视觉长度（CJK 记 2）而非字符数，中日韩页面才不会因为阈值过高而被合并成大段。
       if (!el.childElementCount) return false;
-      return (el.textContent || '').length >= INLINE_BLOCK_MIN_TEXT;
+      return U.visualLength(el.textContent) >= INLINE_BLOCK_MIN_TEXT;
     }
     return false;
   }
@@ -119,6 +120,9 @@
   function walk(el, ctx, depth) {
     if (depth > MAX_DEPTH || ctx.units.length >= MAX_UNITS) return;
     if (isHardSkip(el)) return;
+    // 行内代码用元素一旦被 CSS 变成块级容器（例如 div > code{display:block}），
+    // 整块都是代码，必须跳过；而行内的 <code> 仍会作为句子的一部分参与翻译。
+    if (INLINE_SOFT_SKIP.has(el.tagName)) return;
 
     const inlineNodes = [];
     const blockKids = [];
