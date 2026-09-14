@@ -1,0 +1,11 @@
+{
+  "name": "ai-page-translator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Edge/Chrome 扩展：用你自己的 AI API 密钥翻译网页，译文显示在原文段落下方",
+  "scripts": {
+    "test": "node --test tests/wpt.test.mjs tests/engine.test.mjs",
+    "icons": "node tools/make-icons.mjs"
+  },
+  "license": "MIT"
+}

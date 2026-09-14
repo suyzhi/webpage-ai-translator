@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AI 网页翻译</title>
+  <link rel="stylesheet" href="../shared/theme.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <img src="../../icons/icon32.png" alt="" width="22" height="22">
+    <div class="grow">
+      <h1>AI 网页翻译</h1>
+      <div class="muted tiny" id="subtitle">译文显示在原文下方</div>
+    </div>
+    <button class="btn btn-ghost icon" id="openOptions" title="设置">⚙</button>
+  </header>
+
+  <div id="noKey" class="banner warn hidden">
+    <div class="grow">尚未配置 AI API 密钥，无法翻译。</div>
+    <button class="btn btn-primary tiny" id="goOptions">去设置</button>
+  </div>
+
+  <div id="errorBox" class="banner err hidden"><div class="grow" id="errorText"></div></div>
+
+  <section class="status">
+    <div class="status-row">
+      <span class="pill" id="statusPill">未翻译</span>
+      <span class="grow"></span>
+      <span class="muted tiny" id="statusDetail"></span>
+    </div>
+    <div class="bar" id="progressBar"><i></i></div>
+  </section>
+
+  <div class="actions">
+    <button class="btn btn-primary btn-block" id="mainBtn">翻译此页面</button>
+    <button class="btn btn-block hidden" id="stopBtn">停止</button>
+  </div>
+
+  <section class="quick">
+    <div class="field">
+      <div class="label"><span>目标语言</span></div>
+      <select id="targetLang"></select>
+    </div>
+
+    <div class="field">
+      <div class="label"><span>并发数量</span><span class="mono" id="concurrencyVal">4</span></div>
+      <input type="range" id="concurrency" min="1" max="16" step="1" value="4">
+      <div class="hint">越高越快，但可能触发 API 速率限制。建议 3–6。</div>
+    </div>
+
+    <div class="field">
+      <div class="label"><span>显示方式</span></div>
+      <div class="seg" id="displaySeg">
+        <button data-value="bilingual" aria-pressed="true">双语对照</button>
+        <button data-value="translation" aria-pressed="false">仅译文</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span class="muted tiny">快捷键 Alt+Shift+T</span>
+    <span class="grow"></span>
+    <span class="muted tiny" id="modelLabel"></span>
+  </footer>
+
+  <script src="../shared/constants.js"></script>
+  <script src="../shared/util.js"></script>
+  <script src="../shared/settings.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

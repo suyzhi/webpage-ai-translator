@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "AI 网页翻译 (AI Page Translator)",
+  "version": "1.0.0",
+  "description": "用你自己的 AI API 密钥翻译网页：译文呈现在原文段落下方，字体字号与原文完全一致，支持目标语言切换与并发数调节。",
+  "minimum_chrome_version": "114",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "contextMenus",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "AI 网页翻译",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "toggle-translate": {
+      "suggested_key": {
+        "default": "Alt+Shift+T"
+      },
+      "description": "翻译 / 还原当前页面"
+    }
+  }
+}

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Page Translator — Test Page</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 16px/1.7 Georgia, "Times New Roman", serif; max-width: 860px; margin: 0 auto; padding: 32px; color: #1f2937; }
+  h1 { font: 700 34px/1.25 "Segoe UI", sans-serif; letter-spacing: -0.02em; }
+  h2 { font: 600 21px/1.4 "Segoe UI", sans-serif; margin-top: 34px; }
+  .lead { font-size: 18px; color: #4b5563; }
+  code { font: 13px/1.6 Consolas, monospace; background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 14px 16px; border-radius: 8px; font: 13px/1.6 Consolas, monospace; overflow: auto; }
+  nav { display: flex; gap: 18px; }
+  nav a { font: 600 14px/1 "Segoe UI", sans-serif; color: #4f46e5; text-decoration: none; }
+  table { border-collapse: collapse; width: 100%; font-family: "Segoe UI", sans-serif; font-size: 14px; }
+  th, td { border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }
+  th { background: #f9fafb; }
+  .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; }
+  .card h3 { margin: 0 0 8px; font: 600 16px/1.3 "Segoe UI", sans-serif; }
+  .hero { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: #111827; }
+  button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  blockquote { border-left: 3px solid #d1d5db; margin: 0; padding-left: 16px; color: #4b5563; font-style: italic; }
+</style>
+</head>
+<body>
+  <h1>The quick brown fox jumps over the lazy dog</h1>
+  <p class="lead">This page is a stress test for the AI Page Translator extension. Every paragraph here exercises a different part of the extraction algorithm: headings, links, lists, tables, flex layouts, code blocks, mixed content and nested containers.</p>
+
+  <nav><a href="#">Home</a><a href="#">Documentation</a><a href="#">Pricing</a><a href="#">Contact us</a></nav>
+
+  <h2>1. Plain paragraphs</h2>
+  <p>Translation quality depends on context. A single sentence without context is ambiguous, but a paragraph gives the model enough information to choose the right terminology. Numbers such as 1,234.56, units like 42 km/h, dates like 2025-01-31 and prices like $19.99 should stay untouched.</p>
+  <p>Links should keep working: read the <a href="https://example.com/docs">official documentation</a> for details, or email <a href="mailto:support@example.com">support@example.com</a>. Placeholders like <code>{userName}</code> and <code>${amount}</code> must survive the round trip unchanged.</p>
+
+  <h2>2. Lists</h2>
+  <ul>
+    <li>Concurrency is configurable between one and sixteen parallel requests.</li>
+    <li>Identical strings are de-duplicated and translated only once per page.</li>
+    <li>Cached translations are reused across tabs and sessions.</li>
+  </ul>
+  <ol>
+    <li>Click the extension icon in the toolbar.</li>
+    <li>Enter your own API key in the settings page.</li>
+    <li>Press Translate this page and watch the progress badge.</li>
+  </ol>
+
+  <h2>3. Table</h2>
+  <table>
+    <thead><tr><th>Feature</th><th>Default</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Concurrency</td><td>4</td><td>Raise it if your provider allows more requests per minute.</td></tr>
+      <tr><td>Batch size</td><td>1200 characters</td><td>Smaller batches start faster, larger batches cost fewer tokens.</td></tr>
+      <tr><td>Cache</td><td>Enabled</td><td>Keyed by the prompt plus the source text.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>4. Code must not be translated</h2>
+  <pre><code>function translate(items, concurrency) {
+  return runPool(items, concurrency, async (item) => {
+    return await callModel(item.text);
+  });
+}</code></pre>
+  <p>Inline code such as <code>Array.prototype.map</code> stays as it is, but the surrounding sentence is translated normally.</p>
+
+  <h2>5. Nested containers and mixed content</h2>
+  <div class="card">
+    <h3>Card title</h3>
+    <p>Paragraphs inside a nested container should each get their own translation block, placed directly underneath the paragraph they belong to.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Nested card A</h3>
+        <p>Deeply nested blocks still work because the extractor only treats elements without block-level children as translation units.</p>
+      </div>
+      <div class="card">
+        <h3>Nested card B</h3>
+        <p>Flex and grid containers are handled specially so that inserted translations never become stray flex items.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>6. Already translated / non-translatable</h2>
+  <p translate="no">This paragraph has translate="no" and must be skipped entirely.</p>
+  <p class="notranslate">This paragraph has class="notranslate" and must be skipped too.</p>
+  <p>这段文字已经是中文了，如果目标语言是中文，它应当被自动跳过，不产生任何 API 请求。</p>
+
+  <h2>7. Typography</h2>
+  <p style="font-family: 'Courier New', monospace; font-size: 19px; color: #b91c1c; letter-spacing: .5px;">This paragraph uses a monospace font at 19px in dark red — the translation must copy exactly these typographic properties.</p>
+  <p class="hero">Big headline text</p>
+  <blockquote>Quoted material keeps its own indentation and italic style.</blockquote>
+
+  <h2>8. UI-ish elements</h2>
+  <p>
+    <button type="button">Accept all cookies</button>
+    <button type="button">Manage preferences</button>
+  </p>
+  <p>Version 1.0.0 — released on 2025-01-31 — © Example Corp.</p>
+</body>
+</html>

@@ -1,0 +1,10 @@
+node_modules/
+*.log
+*.zip
+*.crx
+*.pem
+.DS_Store
+Thumbs.db
+_probe.ps1
+.vscode/
+.idea/
