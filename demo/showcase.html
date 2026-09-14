@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Shipping a browser extension that speaks every language</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fbfbfd; color: #16181d;
+         font: 17px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  header.site { display: flex; align-items: center; gap: 26px; padding: 18px 48px;
+                border-bottom: 1px solid #e8e9ee; background: rgba(255,255,255,.86); backdrop-filter: blur(8px); }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.02em; }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(140deg,#4f46e5,#7c3aed); display: block; }
+  nav.site { display: flex; gap: 22px; }
+  nav.site a { font-size: 14.5px; font-weight: 550; color: #4b5563; text-decoration: none; }
+  nav.site a:hover { color: #4f46e5; }
+  .spacer { flex: 1; }
+  .signin { font-size: 14px; font-weight: 600; color: #4f46e5; text-decoration: none; }
+  main { max-width: 748px; margin: 0 auto; padding: 52px 24px 90px; }
+  .kicker { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #7c3aed; }
+  h1 { font-size: 44px; line-height: 1.12; letter-spacing: -.032em; font-weight: 800; margin: 12px 0 18px; }
+  .lead { font-size: 20px; line-height: 1.62; color: #4b5563; margin: 0 0 34px; }
+  h2 { font-size: 25px; line-height: 1.3; letter-spacing: -.02em; font-weight: 700; margin: 44px 0 14px; }
+  p { margin: 0 0 20px; }
+  a { color: #4f46e5; }
+  code { font: 14px/1.5 "SFMono-Regular", Consolas, monospace; background: #f1f2f6; padding: 2px 6px; border-radius: 5px; color: #b91c1c; }
+  blockquote { margin: 28px 0; padding: 4px 0 4px 20px; border-left: 3px solid #ddd6fe; color: #52525b; font-style: italic; font-size: 17.5px; }
+  ul { margin: 0 0 22px; padding-left: 22px; }
+  li { margin-bottom: 9px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; margin: 6px 0 8px;
+          border: 1px solid #e8e9ee; border-radius: 10px; overflow: hidden; }
+  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #eef0f4; }
+  th { background: #f7f8fb; font-weight: 650; font-size: 13.5px; letter-spacing: .01em; }
+  tr:last-child td { border-bottom: 0; }
+  .mono-red { font-family: "Courier New", Courier, monospace; font-size: 19px; color: #b91c1c; letter-spacing: .4px; }
+  .note { font-size: 14px; color: #6b7280; border-top: 1px solid #e8e9ee; margin-top: 46px; padding-top: 18px; }
+</style>
+</head>
+<body>
+  <header class="site">
+    <span class="brand"><i></i>Lingua</span>
+    <nav class="site">
+      <a href="#">Docs</a>
+      <a href="#">Pricing</a>
+      <a href="#">Blog</a>
+      <a href="#">Changelog</a>
+    </nav>
+    <span class="spacer"></span>
+    <a class="signin" href="#">Sign in</a>
+  </header>
+
+  <main>
+    <div class="kicker">Engineering</div>
+    <h1>Shipping a browser extension that speaks every language</h1>
+    <p class="lead">A practical walkthrough of on-page translation with large language models: how to find the right blocks, batch them efficiently, cache the results, and keep the original typography intact.</p>
+
+    <h2>Why translate in context?</h2>
+    <p>Sentence-by-sentence translation loses context. When a whole paragraph is sent at once, the model can resolve pronouns, keep terminology consistent, and choose an idiomatic register instead of a literal one.</p>
+    <p>The extractor walks the DOM once and treats every element without block-level children as a translation unit, so inline nodes such as <a href="#">links</a> or <code>&lt;strong&gt;</code> markup never split a sentence apart.</p>
+
+    <h2>Typography fidelity</h2>
+    <p class="mono-red">This paragraph uses a monospace font at 19px in dark red — the translation below must copy exactly these properties.</p>
+    <blockquote>Good translation is invisible: the reader notices the meaning, never the mechanism behind it.</blockquote>
+
+    <h2>What happens under load</h2>
+    <ul>
+      <li>Identical strings are translated once and fanned out to every copy on the page.</li>
+      <li>Paragraphs are packed into batches of roughly 1,200 characters to cut round trips.</li>
+      <li>Failed batches are halved and retried, so one bad paragraph never breaks the page.</li>
+    </ul>
+
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>Default</th><th>Why it matters</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Concurrency</td><td>4 parallel requests</td><td>Fills the pipe without tripping rate limits.</td></tr>
+        <tr><td>Cache</td><td>4,000 entries</td><td>A second visit costs almost nothing at all.</td></tr>
+        <tr><td>First batch</td><td>400 characters</td><td>The first translation appears much sooner.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Already in the target language</h2>
+    <p>这段中文已经是目标语言了，书写系统判定会在请求发出之前就把它整段跳过，既不消耗额度也不打扰阅读。</p>
+
+    <p class="note">Built with plain JavaScript. No build step, no dependencies, and no server in the middle.</p>
+  </main>
+</body>
+</html>

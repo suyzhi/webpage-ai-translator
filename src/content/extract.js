@@ -101,6 +101,20 @@
     return out.join('');
   }
 
+  /*
+   * 横向排列的 flex/grid「UI 条」：导航条、工具栏、带图标的品牌名等。
+   * 其内容都是短标签，且插入块级译文会变成新的 flex item 打乱整行布局，
+   * 因此整条跳过（纵向排列的 flex 容器不受影响，插入新块是安全的）。
+   */
+  function isUiStrip(cs, text) {
+    if (!cs) return false;
+    const d = cs.display || '';
+    if (d.indexOf('flex') < 0 && d.indexOf('grid') < 0) return false;
+    const dir = cs.flexDirection || 'row';
+    if (dir.indexOf('column') === 0) return false;
+    return U.visualLength(text) < 40;
+  }
+
   function pushUnit(ctx, el, text, kind, anchorNode) {
     if (ctx.units.length >= MAX_UNITS) return;
     const norm = U.normalizeText(text);
@@ -117,7 +131,7 @@
     });
   }
 
-  function walk(el, ctx, depth) {
+  function walk(el, ctx, depth, selfStyle) {
     if (depth > MAX_DEPTH || ctx.units.length >= MAX_UNITS) return;
     if (isHardSkip(el)) return;
     // 行内代码用元素一旦被 CSS 变成块级容器（例如 div > code{display:block}），
@@ -126,35 +140,41 @@
 
     const inlineNodes = [];
     const blockKids = [];
+    const blockStyles = [];
     for (let n = el.firstChild; n; n = n.nextSibling) {
       if (n.nodeType === 3) { if (n.nodeValue && n.nodeValue.trim()) inlineNodes.push(n); continue; }
       if (n.nodeType !== 1) continue;
       if (isHardSkip(n)) continue;
       if (!isVisible(n)) continue;
       const cs = getComputedStyle(n);
-      if (isBlockish(n, cs)) blockKids.push(n);
+      if (isBlockish(n, cs)) { blockKids.push(n); blockStyles.push(cs); }
       else inlineNodes.push(n);
     }
 
     if (!blockKids.length) {
       // 叶子块：整段文本就是一个翻译单元
-      pushUnit(ctx, el, inlineTextOf(el), 'full', null);
+      const text = inlineTextOf(el);
+      if (!isUiStrip(selfStyle, text)) pushUnit(ctx, el, text, 'full', null);
       return;
     }
 
     // 混合元素：行内部分单独成单元，插入在最后一个行内节点之后
     if (inlineNodes.length) {
-      const anchor = inlineNodes[inlineNodes.length - 1];
-      pushUnit(ctx, el, inlineTextOfNodes(inlineNodes), 'partial', anchor);
+      const text = inlineTextOfNodes(inlineNodes);
+      if (!isUiStrip(selfStyle, text)) {
+        pushUnit(ctx, el, text, 'partial', inlineNodes[inlineNodes.length - 1]);
+      }
     }
-    for (let i = 0; i < blockKids.length; i++) walk(blockKids[i], ctx, depth + 1);
+    for (let i = 0; i < blockKids.length; i++) walk(blockKids[i], ctx, depth + 1, blockStyles[i]);
   }
 
   function collect(root, settings) {
     const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0 };
     const start = root || document.body;
     if (!start) return [];
-    walk(start, ctx, 0);
+    let rootStyle = null;
+    try { rootStyle = getComputedStyle(start); } catch (e) {}
+    walk(start, ctx, 0, rootStyle);
     return ctx.units;
   }
 

@@ -9,6 +9,35 @@
 
 ---
 
+## 🖼 效果预览
+
+以下截图取自**真实运行**：无头 Edge 加载本扩展，翻译 `demo/showcase.html`。
+共 32 个段落，**3 个 API 请求**（7 + 9 + 16 段分批），排版一致性校验 12/12 通过。
+
+| 翻译前 | 翻译后 |
+| --- | --- |
+| ![翻译前](docs/screenshots/showcase-before.png) | ![翻译后](docs/screenshots/showcase-after.png) |
+
+**排版一致性特写**——等宽 19px 深红段落、斜体引用块，译文的字体族 / 字号 / 字重 / 行高 / 颜色逐项与原文一致：
+
+![排版对照](docs/screenshots/typography-zoom.png)
+
+---
+
+## ⚡ 无需 API 密钥的离线体验
+
+仓库自带一个零依赖的本地模拟服务，用来验证完整链路（分批、并发、缓存、渲染）：
+
+```bash
+node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
+```
+
+然后在扩展设置里填 **Base URL** `http://127.0.0.1:8931/v1`、**API 密钥留空**，
+打开 <http://127.0.0.1:8931/demo/showcase.html> 就能得到与上面截图完全一致的效果。
+（该服务只是本地回声服务，真实翻译仍然由你配置的模型完成。）
+
+---
+
 ## ✨ 功能特性
 
 | 能力 | 说明 |
@@ -166,8 +195,9 @@ LRU 淘汰、提示词构造与三级解析、HTTP 错误分类、**渲染与插
 （兄弟插入 / 追加内部 / flex 与表格特例 / 排版属性逐条复制），以及**完整引擎链路**
 （去重 / 缓存命中 / 批量 / 429 重试 / 400 拆分 / 401 快停 / 网络失败降级 / 缓存跨实例持久化）。
 
-手工验证页面：`demo/test-page.html`（含标题、链接、列表、表格、代码块、flex 导航、嵌套卡片、
-`translate="no"`、中英混排、特殊字体段落等压力用例）。
+手工验证页面：
+- `demo/test-page.html` —— 压力用例（标题、链接、列表、表格、代码块、flex 导航、嵌套卡片、`translate="no"`、中英混排、特殊字体段落）；
+- `demo/showcase.html` + `tools/mock-ai-server.mjs` —— 可复现的离线效果演示（见上文截图）。
 
 ### 目录结构
 ```
@@ -180,8 +210,9 @@ src/
   options/  options.html options.css options.js
 icons/      16/32/48/128 PNG（由 tools/make-icons.mjs 生成）
 tests/      wpt.test.mjs engine.test.mjs render.test.mjs
-demo/       test-page.html
-tools/      make-icons.mjs
+demo/       test-page.html showcase.html showcase-dict.json
+docs/       screenshots/ 效果截图
+tools/      make-icons.mjs mock-ai-server.mjs
 ```
 
 ---
