@@ -7,13 +7,23 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></symbol>
+    <symbol id="i-translate" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+    <symbol id="i-dual" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 10h11"/><path d="M4 15h16" opacity=".45"/><path d="M4 19h11" opacity=".45"/></symbol>
+    <symbol id="i-single" viewBox="0 0 24 24"><path d="M4 8h16"/><path d="M4 13h16"/><path d="M4 18h10"/></symbol>
+  </svg>
+
   <header class="head">
-    <img src="../../icons/icon32.png" alt="" width="22" height="22">
+    <div class="logo"><img src="../../icons/icon32.png" alt="" width="22" height="22"></div>
     <div class="grow">
       <h1>AI 网页翻译</h1>
-      <div class="muted tiny" id="subtitle">译文显示在原文下方</div>
+      <div class="sub truncate" id="subtitle"><span class="model-dot"></span><span id="modelLabel"></span></div>
     </div>
-    <button class="btn btn-ghost icon" id="openOptions" title="设置">⚙</button>
+    <button class="btn btn-ghost icon" id="openOptions" title="打开设置" aria-label="打开设置"><svg class="i"><use href="#i-gear"/></svg></button>
   </header>
 
   <div id="noKey" class="banner warn hidden">
@@ -23,45 +33,62 @@
 
   <div id="errorBox" class="banner err hidden"><div class="grow" id="errorText"></div></div>
 
-  <section class="status">
-    <div class="status-row">
-      <span class="pill" id="statusPill">未翻译</span>
-      <span class="grow"></span>
-      <span class="muted tiny" id="statusDetail"></span>
+  <section class="status card" aria-live="polite">
+    <div class="ring" id="ring">
+      <svg class="ring-svg" viewBox="0 0 44 44" aria-hidden="true">
+        <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs>
+        <circle class="track" cx="22" cy="22" r="18"/>
+        <circle class="val" id="ringVal" cx="22" cy="22" r="18" pathLength="100"/>
+      </svg>
+      <span class="ring-label mono" id="statusPercent"></span>
+      <svg class="ring-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-translate"/></svg>
     </div>
-    <div class="bar" id="progressBar"><i></i></div>
+    <div class="grow">
+      <div class="status-row"><span class="pill" id="statusPill">未翻译</span></div>
+      <div class="detail truncate" id="statusDetail"></div>
+    </div>
+    <div class="bar hidden-bar" id="progressBar"><i></i></div>
   </section>
 
   <div class="actions">
-    <button class="btn btn-primary btn-block" id="mainBtn">翻译此页面</button>
-    <button class="btn btn-block hidden" id="stopBtn">停止</button>
+    <button class="btn btn-primary grow" id="mainBtn">翻译此页面</button>
+    <button class="btn hidden" id="restoreBtn" title="还原为原文"><svg class="i"><use href="#i-undo"/></svg>还原</button>
   </div>
 
   <section class="quick">
+    <div class="quick-head">翻译设置</div>
+
     <div class="field">
-      <div class="label"><span>目标语言</span></div>
+      <label class="label" for="targetLang"><span class="lbl"><svg class="i"><use href="#i-globe"/></svg>目标语言</span></label>
       <select id="targetLang"></select>
     </div>
 
     <div class="field">
-      <div class="label"><span>并发数量</span><span class="mono" id="concurrencyVal">4</span></div>
-      <input type="range" id="concurrency" min="1" max="16" step="1" value="4">
-      <div class="hint">越高越快，但可能触发 API 速率限制。建议 3–6。</div>
+      <div class="label"><span class="lbl" id="displayLabel"><svg class="i"><use href="#i-dual"/></svg>显示方式</span></div>
+      <div class="seg" id="displaySeg" role="group" aria-labelledby="displayLabel">
+        <button type="button" data-value="bilingual" aria-pressed="true"><svg class="i"><use href="#i-dual"/></svg>双语对照</button>
+        <button type="button" data-value="translation" aria-pressed="false"><svg class="i"><use href="#i-single"/></svg>仅译文</button>
+      </div>
     </div>
 
     <div class="field">
-      <div class="label"><span>显示方式</span></div>
-      <div class="seg" id="displaySeg">
-        <button data-value="bilingual" aria-pressed="true">双语对照</button>
-        <button data-value="translation" aria-pressed="false">仅译文</button>
+      <div class="label"><label for="concurrency" class="lbl"><svg class="i"><use href="#i-bolt"/></svg>并发数量</label><span class="value-pill mono" id="concurrencyVal">4</span></div>
+      <input type="range" id="concurrency" min="1" max="32" step="1" value="4">
+      <div class="chips sm" id="concPresets" role="group" aria-label="并发快捷选择">
+        <button type="button" class="chip" data-value="2">2</button>
+        <button type="button" class="chip" data-value="4">4</button>
+        <button type="button" class="chip" data-value="8">8</button>
+        <button type="button" class="chip" data-value="16">16</button>
+        <button type="button" class="chip" data-value="32">32</button>
       </div>
+      <div class="hint">同一密钥的所有标签页共享此上限；触发限流会自动降速。建议 3–8。</div>
     </div>
   </section>
 
   <footer class="foot">
-    <span class="muted tiny">快捷键 Alt+Shift+T</span>
+    <a href="#" class="muted tiny" id="shortcut" title="快捷键：翻译 / 还原（点击修改）"><kbd>⌥</kbd> <kbd>A</kbd></a>
     <span class="grow"></span>
-    <span class="muted tiny" id="modelLabel"></span>
+    <a href="#" class="tiny" id="footOptions">全部设置 →</a>
   </footer>
 
   <script src="../shared/constants.js"></script>

@@ -17,26 +17,22 @@
     return NS.langName(settings.sourceLang, true);
   }
 
+  /*
+   * \u7cfb\u7edf\u63d0\u793a\u8bcd\u968f\u6bcf\u4e2a\u6279\u6b21\u91cd\u590d\u53d1\u9001\uff0c\u662f\u56fa\u5b9a\u5f00\u9500\uff1a\u4fdd\u6301\u7cbe\u7b80\uff08\u7ea6 200 token\uff09\uff0c
+   * \u89c4\u5219\u8986\u76d6\u9762\u4e0e\u65e7\u7248\u4e00\u81f4\uff0c\u53ea\u53bb\u6389\u4e86\u5197\u4f59\u63aa\u8f9e\u3002
+   */
   function buildSystem(settings) {
     const target = targetName(settings);
     const lines = [
-      'You are a professional web-page translator. The user sends text segments extracted from a web page, each wrapped in a tag of the form <t id="N">...</t>.',
-      '',
-      'TASK: Translate every segment into ' + target + '.',
-      '',
-      'OUTPUT RULES (follow exactly):',
-      '1. Reply with the translated segments ONLY. No preamble, no explanation, no notes, no markdown code fences, no extra text before or after.',
-      '2. Reproduce every segment with the same tag name and the same id: <t id="N">translated text</t>.',
-      '3. Never renumber, merge, split, reorder, add or drop segments. The output must contain exactly one tag per input tag.',
-      '4. Translate naturally and idiomatically, as a native ' + target + ' writer would. Preserve the original meaning, tone, register, formatting and level of detail. Never summarize, explain or censor.',
-      '5. Keep placeholders such as \u27e60\u27e7, \u27e61\u27e7 exactly as they are. They stand for URLs, e-mail addresses, code or template variables: never translate, delete, reorder, split or reformat them.',
-      '6. Keep numbers, units, dates, times, prices, version numbers, code identifiers, file names and e-mail addresses unchanged.',
-      '7. Keep proper nouns, brand names and product names in their original form unless a well-established translation exists.',
-      '8. Preserve every line break inside a segment exactly as in the source.',
-      '9. If a segment is already in ' + target + ', or contains only a name, number, symbol or code, copy it through unchanged.',
-      '10. Do not wrap the translation in quotation marks and do not add punctuation that the source does not imply. Keep the same sentence-final punctuation style as the source.',
-      '',
-      'Source language: ' + sourceName(settings) + '. Target language: ' + target + '.'
+      'Translate web-page text segments into ' + target + '. Source language: ' + sourceName(settings) + '.',
+      'Input: segments wrapped as <t id="N">...</t>.',
+      'Rules:',
+      '1. Output ONLY the segments, each as <t id="N">translation</t> with the same id. Exactly one output tag per input tag: never merge, split, reorder, add or drop. No other text, no code fences.',
+      '2. Translate naturally and faithfully, as a native ' + target + ' writer. Keep tone and every line break. Never summarize, explain or censor.',
+      '3. Keep placeholders like \u27e60\u27e7 exactly as-is.',
+      '4. Keep numbers, units, dates, prices, versions, code, file names, e-mails and brand/product names unchanged unless a well-established translation exists.',
+      '5. If a segment is already ' + target + ' or is only a name, number, symbol or code, copy it unchanged.',
+      '6. Do not add quotation marks or punctuation the source does not imply.'
     ];
     const extra = (settings.customPrompt || '').trim();
     if (extra) {

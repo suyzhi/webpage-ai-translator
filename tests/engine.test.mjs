@@ -347,3 +347,152 @@ test('engine + cache：不同目标语言使用不同缓存键', async () => {
   await runEngine(WPT.settings.normalize(Object.assign({}, BASE_SETTINGS, { targetLang: 'ja' })), items);
   assert.ok(calls.length > after, '换目标语言必须重新请求');
 });
+
+/* ---------------- 高并发：共享限流 / 增量追加 / 不放大请求 ---------------- */
+const isolated = (name, extra) => WPT.settings.normalize(Object.assign({}, BASE_SETTINGS, { baseUrl: 'https://' + name + '.test/v1' }, extra || {}));
+
+test('限流器：AIMD —— 429 并发减半并冷却，连续成功后逐步恢复到上限', async () => {
+  const l = new WPT.util.Limiter(8);
+  l.onRateLimit(0);
+  assert.equal(l.limit, 4);
+  l.onRateLimit(0);
+  assert.equal(l.limit, 2);
+  for (let i = 0; i < 2; i++) l.onSuccess();
+  assert.equal(l.limit, 3);
+  for (let i = 0; i < 50; i++) l.onSuccess();
+  assert.equal(l.limit, 8, '最终恢复到上限');
+  l.setMax(3);
+  assert.equal(l.limit, 3, '调低上限立即生效');
+});
+
+test('限流器：排队的等待者可被中止，不会泄漏名额', async () => {
+  const l = new WPT.util.Limiter(1);
+  await l.acquire();
+  const ctrl = new AbortController();
+  const waiting = l.acquire(ctrl.signal);
+  ctrl.abort();
+  await assert.rejects(waiting, (e) => e.name === 'AbortError');
+  l.release();
+  assert.equal(l.active, 0);
+  assert.equal(l.queue.length, 0);
+});
+
+test('高并发：多个标签页（引擎）共享同一密钥的并发上限，而不是各自一份', async () => {
+  let inflight = 0, peak = 0;
+  makeFetch(async (c) => {
+    inflight++; peak = Math.max(peak, inflight);
+    await new Promise((r) => setTimeout(r, 15));
+    inflight--;
+    return echoTranslator()(c);
+  });
+  const settings = isolated('shared', { concurrency: 2, batchItems: 1, useCache: false });
+  const mk = (tab) => Array.from({ length: 6 }, (_, i) => ({ id: i + 1, text: 'Tab ' + tab + ' paragraph ' + i }));
+  const outs = await Promise.all([runEngine(settings, mk('A')), runEngine(settings, mk('B')), runEngine(settings, mk('C'))]);
+  for (const o of outs) assert.equal(o.results.length, 6);
+  assert.ok(peak <= 2, '三个引擎合计并发不应超过 2，实际峰值 ' + peak);
+});
+
+test('高并发：持续 429 不拆分批次、不放大请求量，最终标记失败并上报 id', async () => {
+  const calls = makeFetch(() => ({ __httpError: 429, message: 'rate limited', headers: { 'retry-after': '0' } }));
+  const settings = isolated('storm', { batchItems: 4, maxRetries: 1, useCache: false });
+  const items = Array.from({ length: 4 }, (_, i) => ({ id: i + 1, text: 'Rate limited paragraph ' + i }));
+  const { stats, engine } = await runEngine(settings, items);
+  assert.equal(stats.failed, 4);
+  assert.deepEqual(engine.failedIds.slice().sort(), [1, 2, 3, 4]);
+  assert.ok(calls.every((c) => segmentsOf(c).length === 4), '限流时不应二分拆分');
+  assert.ok(calls.length <= 1 + 1 + 4, '请求数应有上限，实际 ' + calls.length);
+});
+
+test('高并发：5xx 不拆分（避免对过载服务成倍加压）', async () => {
+  const calls = makeFetch(() => ({ __httpError: 503, message: 'overloaded' }));
+  const settings = isolated('overload', { batchItems: 4, maxRetries: 0, useCache: false });
+  const items = Array.from({ length: 4 }, (_, i) => ({ id: i + 1, text: 'Overloaded paragraph ' + i }));
+  const { stats } = await runEngine(settings, items);
+  assert.equal(stats.failed, 4);
+  assert.equal(calls.length, 1);
+});
+
+test('增量追加：运行中 add() 新段落，不中止在途请求；同文副本合并分发；只结束一次', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const calls = makeFetch(async (c) => { await gate; return echoTranslator()(c); });
+  const settings = isolated('incremental', { useCache: false });
+  const cache = new WPT.TranslationCache();
+  await cache.load(1000);
+  const results = [];
+  const engine = new WPT.Engine({ settings, cache, onResults: (e) => e.forEach((x) => results.push(x)) });
+  const done = engine.run([{ id: 1, text: 'First paragraph' }]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(engine.add([{ id: 2, text: 'First paragraph' }, { id: 3, text: 'Second paragraph' }]), true);
+  release();
+  const stats = await done;
+  assert.equal(engine.finished, true);
+  assert.equal(engine.add([{ id: 9, text: 'late' }]), false, '结束后不再接收');
+  assert.deepEqual(results.map((r) => r[0]).sort(), [1, 2, 3]);
+  assert.equal(stats.total, 3);
+  assert.equal(stats.done, 3);
+  const segs = calls.flatMap(segmentsOf).map((s) => s.text);
+  assert.equal(segs.filter((t) => t === 'First paragraph').length, 1, '在途文本不重复请求');
+});
+
+test('stop()：取消后 idle 仍会结算，不会挂起', async () => {
+  makeFetch(() => new Promise(() => {}));
+  const settings = isolated('cancel', { useCache: false });
+  const cache = new WPT.TranslationCache();
+  await cache.load(1000);
+  const engine = new WPT.Engine({ settings, cache });
+  const done = engine.run([{ id: 1, text: 'Never answered' }]);
+  await new Promise((r) => setTimeout(r, 10));
+  engine.stop();
+  const stats = await done;
+  assert.equal(stats.done, stats.total);
+});
+
+test('providers：响应头已到但响应体卡住时也会超时，不会永久占用并发名额', async () => {
+  globalThis.fetch = async (url, init) => ({
+    ok: true, status: 200, headers: { get: () => null },
+    text: () => new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    })
+  });
+  const settings = Object.assign({}, isolated('stall'), { timeoutMs: 120 });
+  const t0 = Date.now();
+  await assert.rejects(WPT.providers.call(settings, { system: 's', user: 'u' }), (e) => e.name === 'TimeoutError' && e.retryable);
+  assert.ok(Date.now() - t0 < 2000);
+});
+
+/* ---------------- 省 token ---------------- */
+test('省 token：每个请求内的片段编号从 1 开始，不随任务流水号增长', async () => {
+  const calls = makeFetch(echoTranslator());
+  const items = Array.from({ length: 9 }, (_, i) => ({ id: 100 + i, text: 'Numbered paragraph ' + i }));
+  const { results } = await runEngine(isolated('localids', { useCache: false }), items);
+  assert.equal(results.length, 9);
+  for (const c of calls) assert.deepEqual(segmentsOf(c).map((s) => s.id), segmentsOf(c).map((_, i) => i + 1));
+  const map = new Map(results);
+  assert.equal(map.get(108), '译|Numbered paragraph 8', '编号映射回正确的段落');
+});
+
+test('省 token：增量任务（quickStart=false）不再切小首批', async () => {
+  const items = Array.from({ length: 6 }, (_, i) => ({ id: i + 1, text: 'Incremental paragraph number ' + i + ' with some words' }));
+  const settings = isolated('incr', { useCache: false, batchItems: 60, batchChars: 4000, firstBatchChars: 100 });
+  const quick = makeFetch(echoTranslator());
+  await runEngine(settings, items);
+  const lazy = makeFetch(echoTranslator());
+  await runEngine(settings, items, { quickStart: false });
+  assert.ok(quick.length > 1, '用户发起的首轮：首批切小');
+  assert.equal(lazy.length, 1, '增量：整批一次发送');
+});
+
+test('省 token：OpenAI 兼容请求带 max_tokens（推理模型除外），已知平台关闭思考', async () => {
+  const calls = makeFetch(() => ({ content: '<t id="1">x</t>' }));
+  const msg = { system: 's', user: 'u', maxTokens: 1234 };
+  await WPT.providers.call(isolated('mt', { model: 'deepseek-chat' }), msg);
+  await WPT.providers.call(isolated('mt', { model: 'gpt-5-mini' }), msg);
+  await WPT.providers.call(Object.assign({}, BASE_SETTINGS, { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-max' }), msg);
+  await WPT.providers.call(Object.assign({}, BASE_SETTINGS, { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' }), msg);
+  assert.equal(calls[0].body.max_tokens, 1234);
+  assert.equal(calls[0].body.enable_thinking, undefined, '未知平台不发额外参数');
+  assert.equal(calls[1].body.max_tokens, undefined, 'gpt-5 / o 系列不设上限');
+  assert.equal(calls[2].body.enable_thinking, false);
+  assert.deepEqual(calls[3].body.thinking, { type: 'disabled' });
+});

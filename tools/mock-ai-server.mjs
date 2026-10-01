@@ -4,13 +4,14 @@
  * 用法：
  *   node tools/mock-ai-server.mjs                                  # 默认端口 8931
  *   node tools/mock-ai-server.mjs --dict demo/showcase-dict.json    # 使用词典给出真实译文
+ *   node tools/mock-ai-server.mjs --copy-proper                     # 像真实模型一样原样返回人名 / 品牌
  *
  * 然后在扩展设置里填：
  *   Base URL: http://127.0.0.1:8931/v1     API 密钥: 留空（本地地址免密钥）     模型: 任意
  *
  * 端点：
  *   GET  /<path>                  以仓库根目录为根提供静态文件
- *   GET  /__stats                 返回请求数 / 批次数等统计
+ *   GET  /__stats                 返回请求数 / 批次数 / 峰值并发等统计
  *   POST /v1/chat/completions     按 <t id="n">…</t> 批量协议返回译文
  */
 import http from 'node:http';
@@ -29,6 +30,18 @@ const PORT = Number(arg('port', 8931));
 const DICT_PATH = arg('dict', '');
 const PREFIX = arg('prefix', '【译】');
 const DELAY = Number(arg('delay', 140));
+const COPY_PROPER = process.argv.includes('--copy-proper');
+/* 常见界面词：真实模型会翻译它们，即便首字母大写 */
+const UI_WORDS = new Set(['home', 'explore', 'notifications', 'messages', 'bookmarks', 'profile', 'follow', 'following', 'search', 'settings']);
+
+/* 人名 / 品牌 / 专有名词：不超过 5 个词、没有 3 个字母以上的小写开头单词、且不是常见界面词 */
+function looksProper(s) {
+  if (!/^[\sA-Za-z\u00c0-\u024f.'\-]+$/.test(s)) return false;     // 只模拟拉丁字母的人名 / 品牌
+  const words = s.trim().split(/\s+/);
+  if (!words.length || words.length > 5 || /\n/.test(s)) return false;
+  if (words.length === 1 && UI_WORDS.has(words[0].toLowerCase())) return false;
+  return !words.some((w) => /^[a-z]{3,}/.test(w));
+}
 
 let DICT = null;
 if (DICT_PATH) {
@@ -40,11 +53,12 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const unesc = (s) => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
   .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 
-const stats = { requests: 0, segments: 0, batches: [], startedAt: Date.now() };
+const stats = { requests: 0, segments: 0, batches: [], texts: [], inflight: 0, peak: 0, startedAt: Date.now() };
 
 function translate(segment) {
   const key = segment.replace(/\s+/g, ' ').trim();
   if (DICT && Object.prototype.hasOwnProperty.call(DICT, key)) return DICT[key];
+  if (COPY_PROPER && looksProper(key)) return segment;
   return PREFIX + segment;
 }
 
@@ -67,11 +81,15 @@ const server = http.createServer((req, res) => {
       stats.requests++;
       stats.segments += segs.length;
       stats.batches.push(segs.length);
+      for (const m of segs) stats.texts.push(unesc(m[2]));
+      stats.inflight++;
+      stats.peak = Math.max(stats.peak, stats.inflight);
       console.log('[mock] 请求 #' + stats.requests + '：' + segs.length + ' 段' + (json.model ? '（模型 ' + json.model + '）' : ''));
       const content = segs
         .map((m) => '<t id="' + m[1] + '">' + esc(translate(unesc(m[2]))) + '</t>')
         .join('\n');
       setTimeout(() => {
+        stats.inflight--;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           id: 'mock-completion', object: 'chat.completion', created: Math.floor(Date.now() / 1000),

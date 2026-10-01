@@ -6,7 +6,7 @@
 
   const NUM_FIELDS = ['concurrency', 'batchChars', 'batchItems', 'firstBatchChars', 'maxRetries',
     'timeoutMs', 'minTextLength', 'temperature', 'cacheMaxEntries'];
-  const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'autoTranslate', 'animations', 'useCache'];
+  const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'lazyTranslate', 'autoTranslate', 'animations', 'useCache'];
   const TEXT_FIELDS = ['provider', 'baseUrl', 'apiKey', 'model', 'targetLang', 'sourceLang', 'customPrompt'];
 
   let settings = null;
@@ -98,11 +98,31 @@
     for (let i = 0; i < NUM_FIELDS.length; i++) $(NUM_FIELDS[i]).value = settings[NUM_FIELDS[i]];
     for (let i = 0; i < BOOL_FIELDS.length; i++) $(BOOL_FIELDS[i]).checked = !!settings[BOOL_FIELDS[i]];
     for (let i = 0; i < TEXT_FIELDS.length; i++) $(TEXT_FIELDS[i]).value = settings[TEXT_FIELDS[i]] || '';
-    $('concurrencyVal').textContent = settings.concurrency;
+    updateConc(settings.concurrency);
     setSeg('displaySeg', settings.displayMode);
     setSeg('markSeg', settings.markStyle);
     markPreset();
+    updatePreview();
     $('version').textContent = 'AI 网页翻译 v' + NS.VERSION;
+  }
+
+  function updateConc(value) {
+    const v = Math.max(1, Math.min(32, Number(value) || 1));
+    $('concurrency').value = v;
+    $('concurrency').style.setProperty('--fill', ((v - 1) / 31 * 100) + '%');
+    $('concurrencyVal').textContent = v;
+    const chips = $('concPresets').querySelectorAll('.chip');
+    for (let i = 0; i < chips.length; i++) {
+      chips[i].setAttribute('aria-pressed', String(Number(chips[i].dataset.value) === v));
+    }
+  }
+
+  /* 效果预览：显示方式 + 标记样式即时可见 */
+  function updatePreview() {
+    const page = $('previewPage');
+    if (!page) return;
+    page.classList.toggle('only', settings.displayMode === 'translation');
+    ['pvT1', 'pvT2'].forEach(function (id) { $(id).setAttribute('data-mark', settings.markStyle); });
   }
 
   function setSeg(id, value) {
@@ -134,11 +154,11 @@
     for (let i = 0; i < NUM_FIELDS.length; i++) {
       const el = $(NUM_FIELDS[i]);
       el.addEventListener('input', function () {
-        if (el.id === 'concurrency') $('concurrencyVal').textContent = el.value;
+        if (el.id === 'concurrency') updateConc(el.value);
         scheduleSave(collect());
       });
       el.addEventListener('change', function () {
-        if (el.id === 'concurrency') $('concurrencyVal').textContent = el.value;
+        if (el.id === 'concurrency') updateConc(el.value);
         save(collect(), true);
       });
     }
@@ -175,6 +195,20 @@
       if (!b) return;
       setSeg('markSeg', b.dataset.value);
       save({ markStyle: b.dataset.value }, true);
+    });
+
+    $('previewTheme').addEventListener('click', function (e) {
+      const b = e.target.closest('button');
+      if (!b) return;
+      $('previewPage').setAttribute('data-theme', b.dataset.theme);
+      this.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+    });
+
+    $('concPresets').addEventListener('click', function (e) {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      updateConc(chip.dataset.value);
+      save({ concurrency: Number(chip.dataset.value) }, true);
     });
 
     $('toggleKey').addEventListener('click', function () {
@@ -223,6 +257,24 @@
     });
   }
 
+  function initTabs() {
+    const links = [].slice.call($('tabs').querySelectorAll('a'));
+    const map = {};
+    for (let i = 0; i < links.length; i++) map[links[i].getAttribute('href').slice(1)] = links[i];
+    if (typeof IntersectionObserver !== 'function') return;
+    const obs = new IntersectionObserver(function (entries) {
+      for (let i = 0; i < entries.length; i++) {
+        const en = entries[i];
+        if (!en.isIntersecting) continue;
+        const link = map[en.target.id];
+        if (!link) continue;
+        for (let j = 0; j < links.length; j++) links[j].classList.remove('active');
+        link.classList.add('active');
+      }
+    }, { rootMargin: '-60px 0px -65% 0px', threshold: 0 });
+    Object.keys(map).forEach(function (id) { const el = $(id); if (el) obs.observe(el); });
+  }
+
   async function refreshStats() {
     try {
       const resp = await chrome.runtime.sendMessage({ type: NS.MSG.CACHE_STATS });
@@ -243,6 +295,7 @@
     settings = await NS.settings.get();
     applyToForm();
     bindEvents();
+    initTabs();
     refreshStats();
   })().catch(function (e) {
     toast('初始化失败：' + ((e && e.message) || e));

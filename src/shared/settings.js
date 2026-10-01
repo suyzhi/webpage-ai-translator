@@ -24,7 +24,7 @@
     s.targetLang = NS.LANG_MAP[s.targetLang] ? s.targetLang : d.targetLang;
     s.sourceLang = (s.sourceLang && s.sourceLang !== 'auto' && !NS.LANG_MAP[s.sourceLang]) ? 'auto' : (s.sourceLang || 'auto');
     s.displayMode = s.displayMode === 'translation' ? 'translation' : 'bilingual';
-    s.markStyle = ['none', 'underline', 'border', 'background'].indexOf(s.markStyle) >= 0 ? s.markStyle : 'none';
+    s.markStyle = ['none', 'underline', 'border', 'background', 'dim'].indexOf(s.markStyle) >= 0 ? s.markStyle : 'none';
     s.concurrency = clampNum(s.concurrency, L.concurrency, d.concurrency);
     s.batchChars = clampNum(s.batchChars, L.batchChars, d.batchChars);
     s.batchItems = clampNum(s.batchItems, L.batchItems, d.batchItems);
@@ -35,7 +35,7 @@
     s.cacheMaxEntries = clampNum(s.cacheMaxEntries, L.cacheMaxEntries, d.cacheMaxEntries);
     s.temperature = clampNum(s.temperature, L.temperature, d.temperature);
     s.customPrompt = String(s.customPrompt || '').slice(0, 2000);
-    const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations'];
+    const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations', 'lazyTranslate'];
     for (let i = 0; i < flags.length; i++) s[flags[i]] = !!s[flags[i]];
     return s;
   }

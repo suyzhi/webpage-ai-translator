@@ -1,6 +1,11 @@
 /*
  * 翻译缓存：内存 LRU + chrome.storage.local 持久化。
  * 键 = hash(系统提示词 + 原文)，因此更换模型 / 目标语言 / 自定义提示词都会自然失效。
+ *
+ * 持久化索引用单个 Map（key -> 字符数）维护 LRU 顺序：Map 的插入顺序天然是
+ * 「旧 -> 新」，命中时先 delete 再 set 即移到末尾，淘汰时取第一个键，全部 O(1)。
+ * 这取代了早先并行维护的 order 数组（indexOf/splice 均为 O(n)，大缓存下整体
+ * 退化为 O(n²)；可用 tools/bench.mjs 验证吞吐保持线性）。
  */
 (function () {
   'use strict';
@@ -13,9 +18,7 @@
 
   function Cache() {
     this.mem = new U.LRUCache(2000);
-    this.sizes = new Map();        // key -> 字符数
-    this.order = [];               // LRU 顺序（旧 -> 新）
-    this.orderSet = new Set();
+    this.index = new Map();        // key -> 字符数，插入顺序即 LRU（旧 -> 新）
     this.chars = 0;
     this.maxEntries = NS.DEFAULT_SETTINGS.cacheMaxEntries;
     this.maxChars = 3.5 * 1024 * 1024;
@@ -25,6 +28,14 @@
     this.loading = null;
     this.writeChain = Promise.resolve();
   }
+
+  /* 只读兼容视图：早期版本把 orderSet / order 作为独立字段维护，外部（含测试）可能读取。 */
+  Object.defineProperty(Cache.prototype, 'orderSet', {
+    get: function () { return new Set(this.index.keys()); }
+  });
+  Object.defineProperty(Cache.prototype, 'order', {
+    get: function () { return Array.from(this.index.keys()); }
+  });
 
   Cache.prototype.key = function (systemPrompt, text) {
     return NS.CACHE_PREFIX + U.hashText(systemPrompt + '\u0000' + text);
@@ -43,10 +54,9 @@
           for (let i = 0; i < meta.order.length; i++) {
             const entry = meta.order[i];
             if (!entry || !entry[0]) continue;
-            self.order.push(entry[0]);
-            self.orderSet.add(entry[0]);
-            self.sizes.set(entry[0], entry[1] || 0);
-            self.chars += entry[1] || 0;
+            const size = entry[1] || 0;
+            self.index.set(entry[0], size);
+            self.chars += size;
           }
         }
         self.loaded = true;
@@ -66,7 +76,7 @@
       const k = keys[i];
       const hit = this.mem.get(k);
       if (hit !== undefined) { result.set(k, hit); continue; }
-      if (this.orderSet.has(k)) misses.push(k);
+      if (this.index.has(k)) misses.push(k);
     }
     if (misses.length) {
       try {
@@ -87,27 +97,21 @@
     return result;
   };
 
+  /* 标记为最近使用：先删再插，使其移到 Map 末尾（O(1)） */
   Cache.prototype.touch = function (k, size) {
-    if (this.orderSet.has(k)) {
-      const idx = this.order.indexOf(k);
-      if (idx >= 0) this.order.splice(idx, 1);
-      this.chars -= this.sizes.get(k) || 0;
-    } else {
-      this.orderSet.add(k);
+    if (this.index.has(k)) {
+      this.chars -= this.index.get(k) || 0;
+      this.index.delete(k);
     }
-    this.order.push(k);
-    this.sizes.set(k, size);
+    this.index.set(k, size);
     this.chars += size;
   };
 
   Cache.prototype.dropKey = function (k) {
     this.mem.delete(k);
-    if (this.orderSet.has(k)) {
-      this.orderSet.delete(k);
-      const idx = this.order.indexOf(k);
-      if (idx >= 0) this.order.splice(idx, 1);
-      this.chars -= this.sizes.get(k) || 0;
-      this.sizes.delete(k);
+    if (this.index.has(k)) {
+      this.chars -= this.index.get(k) || 0;
+      this.index.delete(k);
     }
     this.pending.delete(k);
   };
@@ -121,12 +125,11 @@
       this.touch(k, v.length);
       if (v.length <= MAX_VALUE_CHARS) this.pending.set(k, v);
     }
-    while (this.order.length > this.maxEntries || this.chars > this.maxChars) {
-      const victim = this.order.shift();
+    while (this.index.size > this.maxEntries || this.chars > this.maxChars) {
+      const victim = this.index.keys().next().value;
       if (victim === undefined) break;
-      this.orderSet.delete(victim);
-      this.chars -= this.sizes.get(victim) || 0;
-      this.sizes.delete(victim);
+      this.chars -= this.index.get(victim) || 0;
+      this.index.delete(victim);
       this.mem.delete(victim);
       this.pending.delete(victim);
       removed.push(victim);
@@ -143,12 +146,13 @@
   };
 
   Cache.prototype.flush = function () {
-    const self = this;
     if (!this.pending.size) return this.writeChain;
     const payload = {};
     this.pending.forEach(function (v, k) { payload[k] = v; });
     this.pending.clear();
-    payload[NS.CACHE_META_KEY] = { v: 1, order: this.order.map(function (k) { return [k, self.sizes.get(k) || 0]; }) };
+    const order = [];
+    this.index.forEach(function (size, k) { order.push([k, size]); });
+    payload[NS.CACHE_META_KEY] = { v: 1, order: order };
     this.writeChain = this.writeChain.then(function () {
       return chrome.storage.local.set(payload).catch(function () {});
     });
@@ -156,14 +160,14 @@
   };
 
   Cache.prototype.enforceLimits = async function () {
-    if (this.order.length <= this.maxEntries && this.chars <= this.maxChars) return;
+    if (this.index.size <= this.maxEntries && this.chars <= this.maxChars) return;
     const removed = [];
-    while (this.order.length > this.maxEntries || this.chars > this.maxChars) {
-      const victim = this.order.shift();
+    while (this.index.size > this.maxEntries || this.chars > this.maxChars) {
+      const victim = this.index.keys().next().value;
       if (victim === undefined) break;
-      this.orderSet.delete(victim);
-      this.chars -= this.sizes.get(victim) || 0;
-      this.sizes.delete(victim);
+      this.chars -= this.index.get(victim) || 0;
+      this.index.delete(victim);
+      this.mem.delete(victim);
       removed.push(victim);
     }
     if (removed.length) {
@@ -174,9 +178,7 @@
 
   Cache.prototype.clear = async function () {
     this.mem.clear();
-    this.sizes.clear();
-    this.order = [];
-    this.orderSet.clear();
+    this.index.clear();
     this.chars = 0;
     this.pending.clear();
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
@@ -191,7 +193,7 @@
   };
 
   Cache.prototype.stats = function () {
-    return { entries: this.order.length, chars: this.chars, memEntries: this.mem.size, maxEntries: this.maxEntries };
+    return { entries: this.index.size, chars: this.chars, memEntries: this.mem.size, maxEntries: this.maxEntries };
   };
 
   NS.TranslationCache = Cache;

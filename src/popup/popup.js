@@ -1,4 +1,4 @@
-/* 弹出面板逻辑 */
+/* 弹出面板逻辑：状态展示 + 翻译/停止/还原 + 快速设置 */
 (function () {
   'use strict';
   const NS = globalThis.WPT;
@@ -17,6 +17,9 @@
     done: '已翻译',
     error: '出错'
   };
+  const BUSY = { scanning: 1, translating: 1 };
+
+  function isLocal(url) { return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/i.test(String(url || '')); }
 
   function fillLanguages() {
     const sel = $('targetLang');
@@ -30,35 +33,57 @@
     }
   }
 
+  function updateConc(value) {
+    const v = Math.max(1, Math.min(32, Number(value) || 1));
+    $('concurrency').value = v;
+    $('concurrency').style.setProperty('--fill', ((v - 1) / 31 * 100) + '%');
+    $('concurrencyVal').textContent = v;
+    const chips = $('concPresets').querySelectorAll('.chip');
+    for (let i = 0; i < chips.length; i++) {
+      chips[i].setAttribute('aria-pressed', String(Number(chips[i].dataset.value) === v));
+    }
+  }
+
   function render() {
     const st = live && live.status ? live.status : 'idle';
+    const busy = !!BUSY[st];
     const pill = $('statusPill');
     pill.textContent = STATUS_TEXT[st] || st;
-    pill.className = 'pill' + (st === 'translating' || st === 'scanning' ? ' busy' : st === 'done' ? ' done' : st === 'error' ? ' err' : '');
+    pill.className = 'pill' + (busy ? ' busy' : st === 'done' ? ' done' : st === 'error' ? ' err' : '');
 
     const total = (live && live.total) || 0;
     const done = (live && live.done) || 0;
     const pct = total ? Math.min(1, done / total) : (st === 'done' ? 1 : 0);
-    $('progressBar').firstChild.style.width = (pct * 100) + '%';
+    $('progressBar').firstChild.style.width = (busy ? pct * 100 : 0) + '%';
+    const showPct = busy && total;
+    $('statusPercent').textContent = showPct ? Math.round(pct * 100) + '%' : '';
+    const ring = $('ring');
+    ring.className = 'ring' + (busy ? ' busy' : st === 'done' ? ' done' : st === 'error' ? ' err' : '') + (showPct ? ' has-label' : '');
+    const arc = busy ? Math.max(6, pct * 100) : st === 'done' ? 100 : 0;
+    $('ringVal').style.strokeDasharray = arc + ' 100';
 
-    if (st === 'translating' || st === 'scanning') {
-      $('statusDetail').textContent = total ? done + ' / ' + total + (live.cached ? '（缓存 ' + live.cached + '）' : '') : '';
+    if (busy) {
+      $('statusDetail').textContent = total ? '已完成 ' + done + ' / ' + total + ' 段' + (live.cached ? ' · 缓存 ' + live.cached : '') : '正在分析页面…';
     } else if (st === 'done') {
-      $('statusDetail').textContent = total + ' 段' + (live.failed ? '，' + live.failed + ' 段失败' : '');
+      $('statusDetail').textContent = (live.translated || 0) + ' 段译文' + (live.failed ? ' · ' + live.failed + ' 段失败' : '') + (live.cached ? ' · 缓存 ' + live.cached : '');
+    } else if (st === 'idle' && live && live.translated) {
+      $('statusDetail').textContent = '已暂停 · 保留 ' + live.translated + ' 段译文';
     } else {
       $('statusDetail').textContent = '';
     }
 
-    const busy = st === 'translating' || st === 'scanning';
     const hasOutput = st === 'done' || (live && live.translated > 0);
+    const canRetry = !busy && live && live.failed > 0;
     let label = '翻译此页面';
     let danger = false;
     if (busy) { label = '停止'; danger = true; }
-    else if (st === 'error') { label = hasOutput ? '重试翻译' : '重新翻译'; }
-    else if (hasOutput) { label = '还原原文'; danger = true; }
+    else if (canRetry) { label = '重试失败段落（' + live.failed + '）'; }
+    else if (st === 'error') { label = hasOutput ? '继续翻译' : '重新翻译'; }
+    else if (st === 'idle' && hasOutput) { label = '继续翻译'; }
+    else if (hasOutput) { label = '重新翻译'; }
     $('mainBtn').textContent = label;
-    $('mainBtn').className = 'btn btn-block ' + (danger ? 'btn-danger' : 'btn-primary');
-    $('stopBtn').classList.add('hidden');
+    $('mainBtn').className = 'btn grow ' + (danger ? 'btn-danger' : 'btn-primary');
+    $('restoreBtn').classList.toggle('hidden', !hasOutput || busy);
 
     const err = live && live.error;
     if (err) { $('errorBox').classList.remove('hidden'); $('errorText').textContent = err; }
@@ -87,28 +112,31 @@
     return resp || { ok: false, error: '注入失败' };
   }
 
+  async function retranslate() {
+    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {});
+    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
+    $('mainBtn').textContent = '分析中…';
+    setTimeout(refresh, 300);
+  }
+
   async function onMain() {
     if (!tab || tab.id == null) return;
     const st = live && live.status;
-    if (st === 'translating' || st === 'scanning') {
+    if (BUSY[st]) {
       await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.STOP }).catch(function () {});
       refresh();
       return;
     }
-    if (st === 'error') {
-      // 出错后重试：先清掉可能已存在的半成品译文，再重新开始
-      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {});
+    const hasOutput = st === 'done' || (live && live.translated > 0);
+    // 失败段落重试 / 停止或出错后继续：不还原，只补翻剩余部分
+    const resume = (live && live.failed > 0) || ((st === 'idle' || st === 'error') && hasOutput);
+    if (resume) {
       await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
-      $('mainBtn').textContent = '分析中…';
       setTimeout(refresh, 300);
       return;
     }
-    if (st === 'done' || (live && live.translated)) {
-      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {});
-      refresh();
-      return;
-    }
-    if (!settings.apiKey && !/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(settings.baseUrl || '')) {
+    if (hasOutput) return retranslate();
+    if (settings && !settings.apiKey && !isLocal(settings.baseUrl)) {
       $('noKey').classList.remove('hidden');
       return;
     }
@@ -121,6 +149,11 @@
     await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
     $('mainBtn').textContent = '分析中…';
     setTimeout(refresh, 300);
+  }
+
+  function onRestore() {
+    if (!tab || tab.id == null) return;
+    chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {}).then(function () { refresh(); });
   }
 
   function overrides() {
@@ -146,19 +179,23 @@
   async function save(patch) {
     settings = await NS.settings.set(patch);
     dirty = true;
-    $('modelLabel').textContent = settings.model || '';
-    $('noKey').classList.toggle('hidden', !!settings.apiKey);
+    $('modelLabel').textContent = modelText(settings);
+    $('noKey').classList.toggle('hidden', !!settings.apiKey || isLocal(settings.baseUrl));
+  }
+
+  function modelText(s) {
+    const p = NS.PRESETS.filter(function (x) { return x.baseUrl && x.baseUrl === s.baseUrl; })[0];
+    return (s.model || '未配置模型') + (p ? ' · ' + p.label : '');
   }
 
   async function init() {
     fillLanguages();
     settings = await NS.settings.get();
     $('targetLang').value = settings.targetLang;
-    $('concurrency').value = settings.concurrency;
-    $('concurrencyVal').textContent = settings.concurrency;
+    updateConc(settings.concurrency);
     setDisplay(settings.displayMode);
-    $('modelLabel').textContent = settings.model || '';
-    $('noKey').classList.toggle('hidden', !!settings.apiKey || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(settings.baseUrl || ''));
+    $('modelLabel').textContent = modelText(settings);
+    $('noKey').classList.toggle('hidden', !!settings.apiKey || isLocal(settings.baseUrl));
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     tab = tabs && tabs[0] ? tabs[0] : null;
@@ -167,37 +204,65 @@
     pollTimer = setInterval(refresh, 600);
   }
 
+  /* 显示实际生效的快捷键（用户可能改过，或因冲突未分配）；点击跳到浏览器的快捷键设置页 */
+  function showShortcut() {
+    const el = $('shortcut');
+    if (!el || !chrome.commands || !chrome.commands.getAll) return;
+    chrome.commands.getAll(function (cmds) {
+      const c = (cmds || []).filter(function (x) { return x.name === 'toggle-translate'; })[0];
+      const key = c && c.shortcut;
+      el.textContent = '';
+      if (!key) { el.textContent = '设置快捷键'; return; }
+      // macOS 返回「⌥A」这样的符号串，其他平台返回「Alt+A」
+      const parts = key.indexOf('+') >= 0 ? key.split('+') : Array.from(key);
+      parts.forEach(function (p, i) {
+        if (i) el.appendChild(document.createTextNode(' '));
+        const k = document.createElement('kbd');
+        k.textContent = p;
+        el.appendChild(k);
+      });
+    });
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    });
+  }
+
   /* 事件绑定 */
+  showShortcut();
   $('mainBtn').addEventListener('click', onMain);
+  $('restoreBtn').addEventListener('click', onRestore);
   $('openOptions').addEventListener('click', function () { chrome.runtime.openOptionsPage(); });
   $('goOptions').addEventListener('click', function () { chrome.runtime.openOptionsPage(); });
+  $('footOptions').addEventListener('click', function (e) { e.preventDefault(); chrome.runtime.openOptionsPage(); });
   $('targetLang').addEventListener('change', function () {
     save({ targetLang: $('targetLang').value }).then(function () {
-      if (live && (live.translated || live.status === 'done')) {
-        // 目标语言变化 -> 还原后重新翻译
-        chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {}).then(function () {
-          setTimeout(function () { chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {}); }, 120);
-        });
-      }
+      if (live && (live.translated || live.status === 'done')) retranslate();
     });
   });
-  $('concurrency').addEventListener('input', function () {
-    $('concurrencyVal').textContent = this.value;
-  });
-  $('concurrency').addEventListener('change', function () {
-    save({ concurrency: Number(this.value) });
+  $('concurrency').addEventListener('input', function () { updateConc(this.value); });
+  $('concurrency').addEventListener('change', function () { updateConc(this.value); save({ concurrency: Number(this.value) }); });
+  $('concPresets').addEventListener('click', function (e) {
+    const btn = e.target.closest('.chip');
+    if (!btn) return;
+    updateConc(btn.dataset.value);
+    save({ concurrency: Number(btn.dataset.value) });
   });
   $('displaySeg').addEventListener('click', function (e) {
     const btn = e.target.closest('button');
     if (!btn) return;
     setDisplay(btn.dataset.value);
     save({ displayMode: btn.dataset.value }).then(function () {
-      if (live && (live.translated || live.status === 'done')) {
-        chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {}).then(function () {
-          setTimeout(function () { chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {}); }, 120);
-        });
-      }
+      if (live && (live.translated || live.status === 'done')) retranslate();
     });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { window.close(); return; }
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (e.key === 'Enter' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA' && tag !== 'BUTTON') {
+      e.preventDefault();
+      onMain();
+    }
   });
 
   window.addEventListener('unload', function () { if (pollTimer) clearInterval(pollTimer); });

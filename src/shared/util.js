@@ -53,8 +53,10 @@
 
   /* 视觉长度：CJK 记 2，其余记 1（用于批量打包估算 token 量） */
   U.visualLength = function (text) {
+    const s = String(text || '');
+    if (!/[^\x00-\x7f]/.test(s)) return s.length;   // 纯 ASCII 快速路径
     let n = 0;
-    for (const ch of String(text || '')) {
+    for (const ch of s) {
       const c = ch.codePointAt(0);
       n += (c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xac00 && c <= 0xd7af) ? 2 : 1;
     }
@@ -177,6 +179,10 @@
     ['armenian', /[\u0530-\u058f]/g]
   ];
 
+  /* 预编译的非全局正则：统计前先快速排除「完全不含目标脚本」的文本 */
+  const SCRIPT_TEST = Object.create(null);
+  for (const [name, re] of SCRIPT_RANGES) SCRIPT_TEST[name] = new RegExp(re.source);
+
   U.scriptCounts = function (text) {
     const counts = Object.create(null);
     const s = String(text || '');
@@ -197,10 +203,20 @@
     if (!lang) return false;
     const target = lang.script;
     if (!target || target === 'latin') return false;
-    const counts = U.scriptCounts(text);
+    const s = String(text || '');
+    // 快速排除：源语言页面通常完全不含目标脚本，省去 20+ 次全量正则扫描
+    const quick = SCRIPT_TEST[target];
+    if (quick && !quick.test(s)) return false;
+    const counts = U.scriptCounts(s);
     let total = 0;
     for (const k in counts) total += counts[k];
-    if (total < 2) return false;
+    // 中日韩目标：夹在句中的英文按「词」计（一个英文词≈一个汉字词），
+    // 否则「OpenAI 发布 GPT 模型」这类中文句子会因为字母多而被误判成外文
+    if ((target === 'han' || target === 'kana' || target === 'hangul') && counts.latin) {
+      const words = (s.match(/[A-Za-z\u00c0-\u024f\u1e00-\u1eff]+/g) || []).length;
+      total = total - counts.latin + words * 1.5;
+    }
+    if (total < 1) return false;
     const c = counts[target] || 0;
 
     if (target === 'han') {
@@ -220,10 +236,14 @@
   };
 
   const NON_TRANSLATABLE_RE = /^(?:[\d\s\p{P}\p{S}]+|https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.]+)$/u;
+  /* 社交媒体里的标识而非语句：@用户名 / #话题 / $股票代码，可多个并列 */
+  /* 「显示名 @用户名」组合（X / Mastodon / Bluesky 的作者行） */
+  const NAME_HANDLE_RE = /^(?:\S+\s){1,6}@[\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?$/u;
+  const TAG_ONLY_RE = /^(?:[@#\uff03$][\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?(?:[\s\u00b7\u2022,\uff0c\u3001|/]+|$))+$/u;
 
   /* 该段文本是否值得送去翻译 */
-  U.isTranslatable = function (text, settings) {
-    const s = U.normalizeText(text);
+  U.isTranslatable = function (text, settings, preNormalized) {
+    const s = preNormalized ? String(text == null ? '' : text) : U.normalizeText(text);
     const minLen = settings && settings.minTextLength != null ? settings.minTextLength : 2;
     if (s.length < Math.max(1, minLen)) return false;
     if (!/\p{L}/u.test(s)) return false;
@@ -231,8 +251,25 @@
     // 纯数字/符号占比过高（如 "1,234.56 +12% ——"）直接跳过
     const letters = (s.match(/\p{L}/gu) || []).length;
     if (letters < 2 && s.length > 8) return false;
+    if (TAG_ONLY_RE.test(s) || NAME_HANDLE_RE.test(s)) return false;
+    // 数字 + 极少字母：计数、时间、比分之类（3h / 1.2K / 27万 / v2 / 2-1 W）
+    if (letters <= 2 && /\d/.test(s)) return false;
     if (settings && settings.skipTargetLang && U.isProbablyTargetLang(s, settings.targetLang)) return false;
     return true;
+  };
+
+  /* 译文与原文实质相同（模型原样返回的人名、品牌、代码等）：忽略大小写、空白与标点比较 */
+  U.sameText = function (a, b) {
+    const key = (x) => String(x == null ? '' : x).toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+    const ka = key(a);
+    return !!ka && ka === key(b);
+  };
+
+  /* 语言代码归一到主语言（兼容 CLD 的旧代码） */
+  const LANG_ALIAS = { iw: 'he', in: 'id', tl: 'fil', nb: 'no', nn: 'no', jw: 'jv' };
+  U.baseLang = function (code) {
+    const c = String(code || '').toLowerCase().split(/[-_]/)[0];
+    return LANG_ALIAS[c] || c;
   };
 
   /* ---------------- 批处理规划 ----------------
@@ -287,6 +324,81 @@
     for (let i = 0; i < width; i++) runners.push(runner());
     await Promise.all(runners);
     if (failure) throw failure;
+  };
+
+  /* ---------------- 共享限流器 ----------------
+   * 同一 API 端点 + 密钥的所有任务（多个标签页、同页多次增量）共用一个限流器：
+   *   - 并发上限 = 用户设置的并发数，而不是「每个标签页各自一份」；
+   *   - AIMD 自适应：遇到 429 并发减半并进入全局冷却（尊重 Retry-After），
+   *     之后每连续成功 limit 次再 +1，逐步恢复到上限，避免 429 风暴；
+   *   - FIFO 排队，保证先提交（视口优先）的批次先发出。
+   */
+  U.Limiter = class Limiter {
+    constructor(max) {
+      this.max = Math.max(1, Math.round(max) || 1);
+      this.limit = this.max;
+      this.active = 0;
+      this.queue = [];
+      this.cooldownUntil = 0;
+      this.okStreak = 0;
+    }
+    setMax(n) {
+      const m = Math.max(1, Math.round(n) || 1);
+      if (m === this.max) return;
+      // 调低立即生效；调高时若当前处于降速状态则保留降速，由成功次数逐步恢复
+      this.limit = this.limit >= this.max ? m : Math.min(this.limit, m);
+      this.max = m;
+      this._drain();
+    }
+    async acquire(signal) {
+      if (signal && signal.aborted) throw abortError();
+      if (this.active < this.limit && !this.queue.length) this.active++;
+      else {
+        await new Promise((resolve, reject) => {
+          const w = { resolve: resolve, reject: reject, onAbort: null, signal: signal };
+          if (signal) {
+            w.onAbort = () => {
+              const i = this.queue.indexOf(w);
+              if (i >= 0) this.queue.splice(i, 1);
+              reject(abortError());
+            };
+            signal.addEventListener('abort', w.onAbort, { once: true });
+          }
+          this.queue.push(w);
+        });
+      }
+      // 已占到名额；若处于 429 冷却期则持有名额等待，防止冷却结束瞬间的突发
+      const wait = this.cooldownUntil - Date.now();
+      if (wait > 0) {
+        try { await U.sleep(wait, signal); } catch (e) { this.release(); throw e; }
+      }
+    }
+    release() {
+      this.active = Math.max(0, this.active - 1);
+      this._drain();
+    }
+    _drain() {
+      while (this.active < this.limit && this.queue.length) {
+        const w = this.queue.shift();
+        this.active++;
+        if (w.signal && w.onAbort) w.signal.removeEventListener('abort', w.onAbort);
+        w.resolve();
+      }
+    }
+    onSuccess() {
+      if (this.limit >= this.max) { this.okStreak = 0; return; }
+      if (++this.okStreak >= this.limit) {
+        this.limit++;
+        this.okStreak = 0;
+        this._drain();
+      }
+    }
+    onRateLimit(retryAfterMs) {
+      this.limit = Math.max(1, Math.floor(this.limit / 2));
+      this.okStreak = 0;
+      const until = Date.now() + (retryAfterMs != null ? retryAfterMs : 1000);
+      if (until > this.cooldownUntil) this.cooldownUntil = until;
+    }
   };
 
   /* ---------------- LRU ---------------- */

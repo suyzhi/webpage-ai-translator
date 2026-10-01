@@ -27,6 +27,10 @@
     return err;
   }
 
+  /*
+   * 超时覆盖「连接 + 响应头 + 读取响应体」全过程：
+   * 高并发下网关常常先回响应头再卡住响应体，只对 fetch() 计时会让该请求永久占用一个并发名额。
+   */
   async function doFetch(url, init, settings, outerSignal) {
     const ctrl = new AbortController();
     let timedOut = false;
@@ -36,12 +40,22 @@
       outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     }
     const timer = setTimeout(function () { timedOut = true; try { ctrl.abort(); } catch (e) {} }, settings.timeoutMs);
+    // 与中止信号赛跑：即便底层 fetch / 响应体读取不响应 signal，超时与取消也一定生效
+    const aborted = new Promise(function (resolve, reject) {
+      if (ctrl.signal.aborted) return reject(U.abortError());
+      ctrl.signal.addEventListener('abort', function () { reject(U.abortError()); }, { once: true });
+    });
+    aborted.catch(function () {});
+    let stage = 'connect';
     try {
-      return await fetch(url, Object.assign({}, init, { signal: ctrl.signal, cache: 'no-store' }));
+      const res = await Promise.race([fetch(url, Object.assign({}, init, { signal: ctrl.signal, cache: 'no-store' })), aborted]);
+      stage = 'body';
+      const text = await Promise.race([res.text(), aborted]);
+      return { ok: res.ok, status: res.status, headers: res.headers, text: text };
     } catch (e) {
       if (outerSignal && outerSignal.aborted) throw U.abortError();
       if (timedOut) {
-        const err = new Error('请求超时（' + Math.round(settings.timeoutMs / 1000) + ' 秒）');
+        const err = new Error('请求超时（' + Math.round(settings.timeoutMs / 1000) + ' 秒' + (stage === 'body' ? '，读取响应体' : '') + '）');
         err.name = 'TimeoutError';
         err.retryable = true;
         err.url = url;
@@ -60,9 +74,8 @@
     }
   }
 
-  async function readBody(res) {
-    let text = '';
-    try { text = await res.text(); } catch (e) { text = ''; }
+  function readBody(res) {
+    const text = res.text || '';
     let json = null;
     try { json = JSON.parse(text); } catch (e) {}
     return { text: text, json: json };
@@ -75,6 +88,29 @@
     }
     if (json && json.message) return String(json.message);
     return U.truncate(text || '', 400);
+  }
+
+  /*
+   * 省 token 的请求参数（OpenAI 兼容协议）：
+   *  - max_tokens：模型偶发「复读」时，没有上限会一直生成到服务端默认上限（常见 4K~8K）全额计费。
+   *    OpenAI 推理模型（o1/o3/o4/gpt-5）只接受 max_completion_tokens 且其中含思考 token，
+   *    设上限反而会截断正文，所以对它们不设。
+   *  - 关闭思考：Qwen3 / GLM-4.5+ 等混合推理模型在部分平台上默认开启思考，
+   *    翻译不需要推理，思考 token 往往是正文的数倍。参数名各家不同，只对已知平台发送，
+   *    避免严格校验参数的服务端返回 400。
+   */
+  const OPENAI_REASONING_RE = /^(?:openai\/)?(?:o\d|gpt-5)/i;
+
+  function applyTokenControls(body, settings, messages) {
+    const model = String(settings.model || '');
+    if (messages.maxTokens && !OPENAI_REASONING_RE.test(model)) body.max_tokens = messages.maxTokens;
+    let host = '';
+    try { host = new URL(settings.baseUrl).hostname; } catch (e) {}
+    if (/(^|\.)(dashscope\.aliyuncs\.com|siliconflow\.cn|siliconflow\.com)$/i.test(host) && /qwen3/i.test(model)) {
+      body.enable_thinking = false;
+    } else if (/(^|\.)bigmodel\.cn$/i.test(host) && /^glm-(?:4\.[5-9]|[5-9])/i.test(model)) {
+      body.thinking = { type: 'disabled' };
+    }
   }
 
   /* ---------------- OpenAI 兼容 (/chat/completions) ---------------- */
@@ -92,11 +128,10 @@
       temperature: settings.temperature,
       stream: false
     };
-    // 注意：不发送 max_tokens —— 部分新模型（o1/gpt-5 等）只接受 max_completion_tokens，
-    // 发送旧字段会直接 400。让服务端使用默认上限更兼容。
+    applyTokenControls(body, settings, messages);
 
     const res = await doFetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, settings, signal);
-    const parsed = await readBody(res);
+    const parsed = readBody(res);
     if (!res.ok) throw makeError(res.status, extractError(parsed.json, parsed.text), res.headers);
     const data = parsed.json;
     if (!data) throw makeError(502, '返回内容不是合法 JSON：' + U.truncate(parsed.text, 200), res.headers);
@@ -131,7 +166,7 @@
       messages: [{ role: 'user', content: messages.user }]
     };
     const res = await doFetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, settings, signal);
-    const parsed = await readBody(res);
+    const parsed = readBody(res);
     if (!res.ok) throw makeError(res.status, extractError(parsed.json, parsed.text), res.headers);
     const data = parsed.json;
     if (!data || !Array.isArray(data.content)) {

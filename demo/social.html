@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Home / Social</title>
+<!--
+  社交媒体压力页（仿 X / Twitter 深色时间线），用于验证：
+    - 人名、@用户名、#话题、$代码、计数、比分、时间 这类「不需要翻译」的内容不被翻译；
+    - 带 lang 属性的推文（lang="zh" 已是目标语言）不送去翻译；
+    - 计数 / 视频计时每秒跳动、侧栏整块重渲染时不反复弹出「翻译完成」、不重复请求；
+    - 无限滚动新增推文静默增量翻译；虚拟列表回收再挂载时复用译文；推文被编辑后重译；
+    - 整个应用根节点带 class="notranslate"（React 应用常见，如 Mastodon）时仍能翻译，具体元素上的声明仍被尊重。
+  测试钩子：window.social.loadMore() / recycle() / edit()
+-->
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #000; color: #e7e9ea; font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: #1d9bf0; text-decoration: none; }
+  .app { display: flex; justify-content: center; }
+  nav.side { width: 240px; padding: 8px 12px; position: sticky; top: 0; height: 100vh; }
+  nav.side a { display: flex; align-items: center; gap: 16px; padding: 12px; border-radius: 999px; color: #e7e9ea; font-size: 20px; }
+  nav.side a i { width: 26px; height: 26px; border-radius: 6px; background: #2f3336; display: block; }
+  main { width: 600px; border-left: 1px solid #2f3336; border-right: 1px solid #2f3336; min-height: 100vh; }
+  .top { position: sticky; top: 0; background: rgba(0,0,0,.65); backdrop-filter: blur(12px); padding: 16px; font-size: 20px; font-weight: 700; border-bottom: 1px solid #2f3336; z-index: 2; }
+  article { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #2f3336; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; background: linear-gradient(135deg, #1d9bf0, #7856ff); }
+  .body { flex: 1; min-width: 0; }
+  .head { display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; }
+  .name { font-weight: 700; color: #e7e9ea; overflow: hidden; text-overflow: ellipsis; }
+  .badge { width: 16px; height: 16px; border-radius: 50%; background: #1d9bf0; flex: 0 0 auto; }
+  .handle, .dot, .time { color: #71767b; }
+  .text { margin-top: 2px; white-space: pre-wrap; word-wrap: break-word; }
+  .media { margin-top: 12px; height: 180px; border-radius: 16px; border: 1px solid #2f3336; background: #16181c; position: relative; }
+  .media .timer { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.7); padding: 0 4px; border-radius: 4px; font-size: 13px; }
+  .actions { display: flex; justify-content: space-between; max-width: 425px; margin-top: 12px; color: #71767b; font-size: 13px; }
+  .actions span { display: flex; align-items: center; gap: 6px; }
+  .actions span::before { content: ""; width: 16px; height: 16px; border-radius: 4px; background: #2f3336; }
+  aside { width: 350px; padding: 12px 24px; }
+  .panel { background: #16181c; border: 1px solid #2f3336; border-radius: 16px; margin-bottom: 16px; overflow: hidden; }
+  .panel h2 { font-size: 20px; margin: 0; padding: 12px 16px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .row .grow { flex: 1; min-width: 0; }
+  .meta { color: #71767b; font-size: 13px; }
+  .trend { font-weight: 700; }
+  .team { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+  .score { color: #71767b; font-weight: 400; }
+  .when { text-align: right; color: #71767b; font-size: 13px; }
+  .follow { background: #eff3f4; color: #0f1419; border: 0; border-radius: 999px; padding: 6px 16px; font-weight: 700; font: inherit; font-weight: 700; }
+  .more { display: block; padding: 16px; }
+</style>
+</head>
+<body>
+<div class="app notranslate" id="app-root">
+  <nav class="side">
+    <a href="#"><i></i><span>Home</span></a>
+    <a href="#"><i></i><span>Explore</span></a>
+    <a href="#"><i></i><span>Notifications</span></a>
+    <a href="#"><i></i><span>Messages</span></a>
+    <a href="#"><i></i><span>Bookmarks</span></a>
+    <a href="#"><i></i><span>Profile</span></a>
+  </nav>
+
+  <main>
+    <div class="top">Home</div>
+    <div class="pinned notranslate" style="padding:8px 16px;color:#71767b;font-size:13px">Pinned note that the page explicitly marked as not translatable.</div>
+    <div id="feed"></div>
+  </main>
+
+  <aside>
+    <div class="panel" id="scores">
+      <h2>NFL</h2>
+      <div class="row"><div class="grow"><div class="team">Steelers <span class="score">2-1</span></div><div class="team">Browns <span class="score">2-1</span></div></div><div class="when">星期五<br>上午8:15</div></div>
+      <div class="row"><div class="grow"><div class="team">Colts <span class="score">1-2</span></div><div class="team">Commanders <span class="score">1-2</span></div></div><div class="when">星期日<br>下午9:30</div></div>
+      <div class="row"><div class="grow"><div class="team">Rams <span class="score">1-2</span></div><div class="team">Eagles <span class="score">2-1</span></div></div><div class="when">星期一<br>上午1:00</div></div>
+      <a class="more" href="#">显示更多</a>
+    </div>
+    <div class="panel" id="trends"></div>
+    <div class="panel" id="follow"></div>
+  </aside>
+</div>
+
+<script>
+(function () {
+  const TWEETS = [
+    { name: 'Ea Nasir V de Ur', handle: '@Arnau_fnv', lang: 'en', text: 'Another victim of the copper scam. Nobody ever learns from history, do they?' },
+    { name: 'Melian Refugee', handle: '@escapefrommelos', lang: 'en', text: 'The idea of buying silver bars from China is honestly the funniest thing I have seen all week.', video: true },
+    { name: 'Edwin Hayward', handle: '@edwinhayward', lang: 'en', text: 'I gave various AIs the following prompt: "This is your free time. Do whatever you like. The only condition is that you must do something." Here is what they did.' },
+    { name: 'Phyrex', handle: '@PhyrexNi', lang: 'zh', text: '今天美股又创新高了，但是成交量明显不足，需要谨慎。' },
+    { name: '无能的艾薇娜', handle: '@klarkxy', text: '周末去了一趟杭州，西湖的荷花开得正好，推荐大家去看看。' },
+    { name: 'Tokyo Daily', handle: '@tokyodaily', lang: 'ja', text: '東京では今週末、大規模な花火大会が開催される予定です。' },
+    { name: 'Chris Ilitch', handle: '@chrisilitch', text: 'Proud of what this team has built over the last three seasons. The best is yet to come.' },
+    { name: 'NASA', handle: '@NASA', lang: 'en', text: 'Our newest telescope just captured the sharpest image ever taken of a distant spiral galaxy.' }
+  ];
+  const TRENDS = [
+    ['Business · Finance', '$EDEL'], ['Trending in United States', '#WednesdayWisdom'], ['Trending in United States', 'Chris Ilitch'], ['Sports · Trending', '#NFL']
+  ];
+  const FOLLOW = [['Phyrex', '@PhyrexNi'], ['无能的艾薇娜', '@klarkxy'], ['Vincent', '@vincent_w']];
+  let counter = 0;
+  const feed = document.getElementById('feed');
+
+  function fmt(n) { return n >= 10000 ? (n / 10000).toFixed(0) + '万' : n.toLocaleString('en-US'); }
+
+  function tweet(t, i) {
+    const a = document.createElement('article');
+    a.dataset.idx = i;
+    a.innerHTML =
+      '<div class="avatar"></div><div class="body">' +
+      '<div class="head"><span class="name"></span><span class="badge"></span><span class="handle"></span><span class="dot">·</span><span class="time"></span></div>' +
+      '<div class="text"></div>' + (t.video ? '<div class="media"><span class="timer">0:00</span></div>' : '') +
+      '<div class="actions"><span class="c-reply"></span><span class="c-rt"></span><span class="c-like"></span><span class="c-view"></span></div></div>';
+    a.querySelector('.name').textContent = t.name;
+    a.querySelector('.handle').textContent = t.handle;
+    a.querySelector('.time').textContent = (3 + i) + '小时';
+    const tx = a.querySelector('.text');
+    tx.textContent = t.text;
+    if (t.lang) tx.setAttribute('lang', t.lang);
+    a.querySelector('.c-reply').textContent = String(20 + i);
+    a.querySelector('.c-rt').textContent = String(200 + i * 7);
+    a.querySelector('.c-like').textContent = fmt(4000 + i * 311);
+    a.querySelector('.c-view').textContent = fmt(260000 + i * 1000);
+    return a;
+  }
+
+  function renderSide() {
+    // 仿 React 整块重渲染：内容不变，但 DOM 节点全部新建
+    document.getElementById('trends').innerHTML = '<h2>有什么新鲜事</h2>' + TRENDS.map(function (t) {
+      return '<div class="row"><div class="grow"><div class="meta">' + t[0] + '</div><div class="trend">' + t[1] + '</div></div></div>';
+    }).join('') + '<a class="more" href="#">显示更多</a>';
+    document.getElementById('follow').innerHTML = '<h2>Who to follow</h2>' + FOLLOW.map(function (f) {
+      return '<div class="row"><div class="avatar"></div><div class="grow"><div class="name">' + f[0] + '</div><div class="handle">' + f[1] + '</div></div><button class="follow">Follow</button></div>';
+    }).join('');
+  }
+
+  for (let i = 0; i < TWEETS.length; i++) feed.appendChild(tweet(TWEETS[i], i));
+  // 虚拟列表离屏占位（仿 Mastodon）：aria-hidden + opacity:0，内部是原始 HTML 文本，不应被翻译
+  const ph = document.createElement('article');
+  ph.className = 'placeholder';
+  ph.setAttribute('aria-hidden', 'true');
+  ph.style.cssText = 'height:60px;opacity:0;overflow:hidden';
+  ph.innerHTML = '<div class="status__wrapper"><span></span></div>';
+  ph.querySelector('span').textContent = '<p>Hidden placeholder with raw <br /> markup that must never be translated.</p>';
+  feed.appendChild(ph);
+  renderSide();
+
+  // 每秒跳动：浏览量、视频计时；每 2 秒刷新相对时间；每 3 秒侧栏整块重渲染
+  setInterval(function () {
+    counter++;
+    document.querySelectorAll('.c-view').forEach(function (v, i) { v.firstChild.nodeValue = fmt(260000 + i * 1000 + counter * 137); });
+    document.querySelectorAll('.timer').forEach(function (t) { t.firstChild.nodeValue = '0:' + String(counter % 60).padStart(2, '0'); });
+    if (counter % 2 === 0) document.querySelectorAll('.time').forEach(function (t, i) { t.firstChild.nodeValue = (3 + i + (counter % 4 ? 0 : 1)) + '小时'; });
+    if (counter % 3 === 0) renderSide();
+  }, 1000);
+
+  const MORE = [
+    'Breaking: the city council approved the new bike lane plan after a heated four hour debate.',
+    'Just finished reading a fantastic book about the history of mathematics. Highly recommend it.',
+    'Does anyone else think the new phone design looks exactly like the old one?',
+    'The sunset over the harbor tonight was absolutely unreal. Photos do not do it justice.',
+    'Reminder: back up your files today. Future you will be very grateful.'
+  ];
+  let extra = 0;
+  window.social = {
+    // 无限滚动：追加新推文
+    loadMore: function () {
+      for (let i = 0; i < MORE.length; i++) {
+        const idx = TWEETS.length + extra++;
+        feed.appendChild(tweet({ name: 'User ' + idx, handle: '@user' + idx, text: MORE[i] + ' (#' + idx + ')' }, idx));
+      }
+      return MORE.length;
+    },
+    // 虚拟列表：移除前 3 条并用全新节点重新挂载（内容不变）
+    recycle: function () {
+      const olds = [].slice.call(feed.children, 0, 3);
+      olds.forEach(function (o) { o.remove(); });
+      olds.reverse().forEach(function (o) { feed.insertBefore(tweet(TWEETS[Number(o.dataset.idx)], Number(o.dataset.idx)), feed.firstChild); });
+      return olds.length;
+    },
+    // 编辑推文：原文被改写
+    edit: function () {
+      const tx = feed.querySelector('article[data-idx="6"] .text');
+      tx.firstChild.nodeValue = 'Edited: honestly, the best is still ahead of us. Thanks for all the support this season.';
+      return true;
+    }
+  };
+})();
+</script>
+</body>
+</html>

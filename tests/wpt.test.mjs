@@ -105,6 +105,38 @@ test('isTranslatable 过滤无效片段', () => {
   assert.equal(U.isTranslatable('\u8fd9\u5df2\u7ecf\u662f\u4e2d\u6587\u4e86', s), false);
 });
 
+test('isTranslatable：社交媒体里的标识、计数、时间不送去翻译', () => {
+  const s = { minTextLength: 2, skipTargetLang: true, targetLang: 'zh-CN' };
+  for (const t of ['@Arnau_fnv', '@Arnau_fnv @Arnau_fn', '@zaijiang@me.ns.ci', 'Mastodon @Mastodon', 'Ea Nasir V de Ur @Arnau_fnv', '#WednesdayWisdom', '$EDEL', '#AI · #LLM',
+    '27\u4e07', '3h', '1.2K', '2-1', '0:01', '4,931', 'v2']) {
+    assert.equal(U.isTranslatable(t, s), false, t);
+  }
+  for (const t of ['Show more', '2 days ago', 'Who to follow', 'email me at @home please']) {
+    assert.equal(U.isTranslatable(t, s), true, t);
+  }
+});
+
+test('isProbablyTargetLang：中文句子夹英文术语仍判为中文，英文句子夹个别汉字仍判为外文', () => {
+  assert.equal(U.isProbablyTargetLang('OpenAI \u53d1\u5e03 GPT \u6a21\u578b', 'zh-CN'), true);
+  assert.equal(U.isProbablyTargetLang('\u6211\u7ed9\u5404\u79cd AI \u63d0\u51fa\u4e86\u4ee5\u4e0b\u63d0\u793a', 'zh-CN'), true);
+  assert.equal(U.isProbablyTargetLang('I really love visiting \u5317\u4eac in the spring', 'zh-CN'), false);
+});
+
+test('sameText：模型原样返回（忽略大小写、空白、标点）视为无需显示', () => {
+  assert.equal(U.sameText('Ea Nasir V de Ur', 'Ea Nasir V de Ur'), true);
+  assert.equal(U.sameText('NFL', 'nfl.'), true);
+  assert.equal(U.sameText('Chris Ilitch', '\u514b\u91cc\u65af\u00b7\u4f0a\u5229\u5947'), false);
+  assert.equal(U.sameText('', ''), false);
+});
+
+test('baseLang：语言代码归一（含 CLD 旧代码）', () => {
+  assert.equal(U.baseLang('zh-CN'), 'zh');
+  assert.equal(U.baseLang('pt-BR'), 'pt');
+  assert.equal(U.baseLang('iw'), 'he');
+  assert.equal(U.baseLang('nb'), 'no');
+  assert.equal(U.baseLang('EN_us'), 'en');
+});
+
 /* ---------------- 批量打包 ---------------- */
 test('planBatches 贪心装箱且首批更小', () => {
   const items = [];
@@ -254,7 +286,7 @@ test('providers.makeError 正确分类可重试 / 致命 / 可拆分', () => {
 /* ---------------- 设置规范化 ---------------- */
 test('settings.normalize 补齐默认值并夹紧范围', () => {
   const s = WPT.settings.normalize({ concurrency: 999, batchChars: 5, targetLang: 'xx', markStyle: 'nope', displayMode: 'weird' });
-  assert.equal(s.concurrency, 16);
+  assert.equal(s.concurrency, 32);
   assert.equal(s.batchChars, 200);
   assert.equal(s.targetLang, 'zh-CN');
   assert.equal(s.markStyle, 'none');
