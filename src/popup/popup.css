@@ -66,3 +66,17 @@ body { width: 360px; padding: 0 0 2px; background: var(--bg); }
 
 .foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--line-soft); background: var(--bg-elev); }
 .foot kbd { font-size: 10px; }
+
+/* token 用量 */
+.usage { font-size: 11px; color: var(--fg-faint); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.usage:empty { display: none; }
+
+/* 自动翻译此网站（页脚内的小开关：弹出面板高度上限 600px，不能再加整行） */
+.site-auto { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--fg-soft); white-space: nowrap; }
+.toggle.mini { width: 28px; height: 16px; }
+.toggle.mini .track { border-radius: 8px; }
+.toggle.mini .track::after { width: 12px; height: 12px; top: 2px; left: 2px; }
+.toggle.mini input:checked + .track::after { transform: translateX(12px); }
+
+/* 快捷键与建议值不一致 */
+.shortcut-warn { color: var(--warn); background: var(--warn-soft); padding: 2px 6px; border-radius: 6px; text-decoration: none; }

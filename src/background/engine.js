@@ -40,6 +40,7 @@
     this.onResults = o.onResults || function () {};
     this.onProgress = o.onProgress || function () {};
     this.onFatal = o.onFatal || function () {};
+    this.onUsage = o.onUsage || function () {};
     this.log = o.log || function () {};
     this.limiter = o.limiter || limiterFor(this.settings);
     this.quickStart = o.quickStart !== false;   // 用户发起的首轮翻译：首批切小，首屏更快
@@ -49,7 +50,8 @@
     this.finished = false;
     this.fatalError = null;
     this.systemPrompt = NS.prompt.buildSystem(this.settings);
-    this.stats = { total: 0, done: 0, cached: 0, failed: 0, requests: 0, batches: 0, startedAt: Date.now() };
+    this.stats = { total: 0, done: 0, cached: 0, failed: 0, requests: 0, batches: 0, startedAt: Date.now(),
+      usage: { input: 0, output: 0, cached: 0 } };
     this.failedIds = [];
     this.entries = new Map();      // 规范化原文 -> { text, ids, cacheKey, state: pending|done|failed, result }
     this.work = [];                // 全部待请求项（用于停止时统计）
@@ -259,6 +261,8 @@
         if (err.fatal) { this.setFatal(err); return; }
         lastErr = err;
         if (!err.retryable) break;                       // 400/413 → 直接拆分重试
+        // 超时：服务端很可能已经生成（并计费）了大半，原样重发整批等于再付一遍；直接拆小重试
+        if (err.name === 'TimeoutError' && pending.length > 1 && depth < MAX_SPLIT_DEPTH) break;
         // 429 的等待由共享限流器的全局冷却承担；这里不消耗普通重试次数
         if (err.status === 429 && rateLimited < RATE_LIMIT_EXTRA_RETRIES) { rateLimited++; attempt--; continue; }
         if (attempt >= maxRetries) break;
@@ -291,19 +295,21 @@
     const user = parts.join('\n');
     await this.limiter.acquire(this.signal);
     let raw;
+    const meta = {};
     try {
       this.stats.requests++;
       raw = await NS.providers.call(this.settings, {
         system: this.systemPrompt,
         user: user,
         maxTokens: NS.providers.estimateMaxTokens(user)
-      }, this.signal);
+      }, this.signal, meta);
       this.limiter.onSuccess();
     } catch (err) {
       if (err && err.status === 429) this.limiter.onRateLimit(err.retryAfterMs);
       throw err;
     } finally {
       this.limiter.release();
+      if (meta.usage) this.addUsage(meta.usage);       // 即使随后判定失败，这些 token 也已计费
     }
     const parsed = NS.prompt.parse(raw);
     const out = new Map();
@@ -311,6 +317,14 @@
       if (parsed.has(i + 1)) out.set(batch[i].ref, parsed.get(i + 1));
     }
     return out;
+  };
+
+  Engine.prototype.addUsage = function (u) {
+    const t = this.stats.usage;
+    t.input += u.input || 0;
+    t.output += u.output || 0;
+    t.cached += u.cached || 0;
+    try { this.onUsage(u); } catch (e) {}
   };
 
   /* ---------------- 结果落地 ---------------- */

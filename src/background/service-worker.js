@@ -78,6 +78,33 @@ importScripts(
     try { await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.TOGGLE }); } catch (e) {}
   }
 
+  /* ---------------- 累计用量（持久化，串行读改写，避免并发请求互相覆盖） ---------------- */
+  let usageChain = Promise.resolve();
+  function recordUsage(u) {
+    if (!u) return;
+    usageChain = usageChain.then(async function () {
+      const got = await chrome.storage.local.get(NS.USAGE_KEY);
+      const cur = got[NS.USAGE_KEY] || { input: 0, output: 0, cached: 0, requests: 0, since: Date.now() };
+      cur.input += u.input || 0;
+      cur.output += u.output || 0;
+      cur.cached += u.cached || 0;
+      cur.requests += 1;
+      const payload = {};
+      payload[NS.USAGE_KEY] = cur;
+      await chrome.storage.local.set(payload);
+    }).catch(function () {});
+    return usageChain;
+  }
+
+  function resetUsage() {
+    usageChain = usageChain.then(function () {
+      const payload = {};
+      payload[NS.USAGE_KEY] = { input: 0, output: 0, cached: 0, requests: 0, since: Date.now() };
+      return chrome.storage.local.set(payload);
+    }).catch(function () {});
+    return usageChain;
+  }
+
   /* ---------------- 任务 ----------------
    * 每个端口（= 一个标签页的一次翻译会话）至多一个运行中的引擎：
    *   - 同一端口上的消息串行处理，避免两次 START 交错 await 后并行跑出两个引擎；
@@ -144,6 +171,10 @@ importScripts(
           setBadge(tabId, String(pct), stats.failed ? '#d97706' : '#4f46e5');
         }
       },
+      onUsage: function (u) {
+        recordUsage(u);                                  // token 已花出去：无论任务是否被取消都计入累计
+        if (!job.cancelled) safePost(port, { type: NS.MSG.USAGE, usage: u });
+      },
       onFatal: function (err) {
         if (!job.cancelled) safePost(port, { type: NS.MSG.ERROR, error: U.describeError(err), code: 'FATAL' });
       },
@@ -179,7 +210,7 @@ importScripts(
   function publicStats(s) {
     return {
       total: s.total, done: s.done, failed: s.failed, cached: s.cached,
-      requests: s.requests, batches: s.batches,
+      requests: s.requests, batches: s.batches, usage: s.usage,
       elapsedMs: (s.finishedAt || Date.now()) - s.startedAt
     };
   }
@@ -243,6 +274,7 @@ importScripts(
             const timer = setTimeout(function () { ctrl.abort(); }, Math.min(s.timeoutMs, 60000));
             try {
               const out = await NS.providers.probe(s, ctrl.signal);
+              recordUsage(out.usage);
               return sendResponse({ ok: true, text: out.text, ms: out.ms, model: s.model });
             } catch (e) {
               return sendResponse({ ok: false, error: U.describeError(e) });
@@ -250,6 +282,9 @@ importScripts(
               clearTimeout(timer);
             }
           }
+          case NS.MSG.USAGE_RESET:
+            await resetUsage();
+            return sendResponse({ ok: true });
           case NS.MSG.PING:
             return sendResponse({ ok: true, version: NS.VERSION });
           default:
@@ -263,24 +298,51 @@ importScripts(
   });
 
   /* ---------------- 自动翻译：动态注册内容脚本 ---------------- */
+  /* 网站名单 -> 匹配模式：example.com 同时覆盖 example.com 与其子域名（IP / 单段主机名不加 *. 前缀） */
+  function sitePatterns(list) {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i];
+      out.push('*://' + h + '/*');
+      if (h.indexOf('.') > 0 && !/^[\d.]+$/.test(h)) out.push('*://*.' + h + '/*');
+    }
+    return out;
+  }
+
+  /* 只往需要自动翻译的网站注入内容脚本：名单之外的网站连脚本都不加载 */
   async function applyAutoRegistration() {
     const s = await NS.settings.get();
     try { await chrome.scripting.unregisterContentScripts({ ids: ['wpt-auto'] }); } catch (e) {}
     if (!s.autoTranslate) return;
+    const reg = {
+      id: 'wpt-auto',
+      js: NS.CONTENT_FILES.slice(),
+      matches: s.autoSites.length ? sitePatterns(s.autoSites) : ['http://*/*', 'https://*/*'],
+      runAt: 'document_idle',
+      allFrames: false,
+      persistAcrossSessions: true
+    };
+    if (s.neverSites.length) reg.excludeMatches = sitePatterns(s.neverSites);
     try {
-      await chrome.scripting.registerContentScripts([{
-        id: 'wpt-auto',
-        js: NS.CONTENT_FILES.slice(),
-        matches: ['http://*/*', 'https://*/*'],
-        runAt: 'document_idle',
-        allFrames: false,
-        persistAcrossSessions: true
-      }]);
+      await chrome.scripting.registerContentScripts([reg]);
     } catch (e) { /* 已注册或权限不足 */ }
   }
 
+  /*
+   * 一次性迁移（设置修订号低于当前值时）：把迁移后的设置写回存储，
+   * 并清空旧缓存 —— 系统提示词已更新，旧缓存键再也不会命中，只会白占配额。
+   */
+  async function migrateStored() {
+    const got = await chrome.storage.local.get(NS.SETTINGS_KEY);
+    const raw = got[NS.SETTINGS_KEY];
+    if (!raw || raw.settingsRev >= NS.SETTINGS_REV) return;
+    await NS.settings.set({});
+    await cache.load();
+    await cache.clear();
+  }
+
   chrome.runtime.onInstalled.addListener(function (details) {
-    applyAutoRegistration();
+    migrateStored().catch(function () {}).then(applyAutoRegistration);
     try {
       chrome.contextMenus.removeAll(function () {
         chrome.contextMenus.create({ id: 'wpt-toggle', title: 'AI 翻译此页面 / 还原原文', contexts: ['page'] });
@@ -306,7 +368,8 @@ importScripts(
     if (area !== 'local' || !changes[NS.SETTINGS_KEY]) return;
     const next = changes[NS.SETTINGS_KEY].newValue || {};
     const prev = changes[NS.SETTINGS_KEY].oldValue || {};
-    if (!!next.autoTranslate !== !!prev.autoTranslate || (next.autoTranslate && next.targetLang !== prev.targetLang)) {
+    const listsChanged = JSON.stringify([next.autoSites, next.neverSites]) !== JSON.stringify([prev.autoSites, prev.neverSites]);
+    if (!!next.autoTranslate !== !!prev.autoTranslate || (next.autoTranslate && (next.targetLang !== prev.targetLang || listsChanged))) {
       applyAutoRegistration();
     }
   });

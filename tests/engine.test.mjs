@@ -59,7 +59,7 @@ function stubChrome() {
   return { store, listeners };
 }
 
-const { store } = stubChrome();
+const { store, listeners } = stubChrome();
 globalThis.importScripts = function () {};     // 后台用 importScripts，测试里手动按序装载
 
 function load(...files) {
@@ -495,4 +495,80 @@ test('省 token：OpenAI 兼容请求带 max_tokens（推理模型除外），�
   assert.equal(calls[1].body.max_tokens, undefined, 'gpt-5 / o 系列不设上限');
   assert.equal(calls[2].body.enable_thinking, false);
   assert.deepEqual(calls[3].body.thinking, { type: 'disabled' });
+});
+
+test('省 token：只返回思考过程的推理模型按致命错误停止，不反复重试', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ body: JSON.parse(init.body) });
+    return { ok: true, status: 200, headers: { get: () => null },
+      text: async () => JSON.stringify({ choices: [{ message: { content: '', reasoning_content: 'Let me think...' } }], usage: { prompt_tokens: 100, completion_tokens: 900 } }) };
+  };
+  const errors = [];
+  const items = Array.from({ length: 6 }, (_, i) => ({ id: i + 1, text: 'Reasoning paragraph ' + i }));
+  const { stats } = await runEngine(isolated('reasoner', { useCache: false, batchItems: 60, batchChars: 4000 }), items, { onFatal: (e) => errors.push(e), quickStart: false });
+  assert.equal(calls.length, 1, '致命错误后不再发请求');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /非推理模型/);
+  assert.equal(stats.usage.output, 900, '已花掉的 token 仍计入用量');
+});
+
+test('省 token：超时不原样重发整批，而是直接拆小', async () => {
+  let n = 0;
+  const calls = makeFetch((call) => {
+    n++;
+    if (n === 1) return new Promise(() => {});           // 第一次（整批）卡住直到超时
+    return echoTranslator()(call);
+  });
+  const items = Array.from({ length: 4 }, (_, i) => ({ id: i + 1, text: 'Slow paragraph ' + i }));
+  const settings = Object.assign({}, isolated('timeout-split', { useCache: false, batchItems: 60, batchChars: 4000, maxRetries: 2 }), { timeoutMs: 120 });
+  const { results } = await runEngine(settings, items);
+  assert.equal(results.length, 4);
+  assert.equal(segmentsOf(calls[0]).length, 4);
+  assert.ok(calls.slice(1).every((c) => segmentsOf(c).length <= 2), '超时后拆半：' + calls.map((c) => segmentsOf(c).length));
+  assert.equal(calls.length, 3, '1 次超时 + 2 个半批，而不是整批重试 2 次');
+});
+
+test('用量统计：解析 OpenAI / DeepSeek / Anthropic 的 usage 并在引擎中累计', async () => {
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const isAnth = /\/messages$/.test(url);
+    const segs = (isAnth ? body.messages[0].content : body.messages[1].content).match(/<t id="\d+">[\s\S]*?<\/t>/g).join('\n');
+    const payload = isAnth
+      ? { content: [{ type: 'text', text: segs }], usage: { input_tokens: 10, cache_read_input_tokens: 30, output_tokens: 7 } }
+      : { choices: [{ message: { content: segs } }], usage: { prompt_tokens: 40, completion_tokens: 7, prompt_cache_hit_tokens: 30 } };
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) };
+  };
+  const seen = [];
+  const one = [{ id: 1, text: 'Usage paragraph' }];
+  const a = await runEngine(isolated('usage-oa', { useCache: false }), one, { onUsage: (u) => seen.push(u) });
+  const b = await runEngine(Object.assign({}, isolated('usage-an', { useCache: false }), { provider: 'anthropic' }), one);
+  assert.deepEqual(a.stats.usage, { input: 40, output: 7, cached: 30 });
+  assert.deepEqual(b.stats.usage, { input: 40, output: 7, cached: 30 }, 'Anthropic 输入 = input + 缓存读取');
+  assert.equal(seen.length, 1);
+});
+
+test('升级迁移：旧设置一次性升级批次大小并清空旧缓存，密钥保留；只执行一次', async () => {
+  const regs = [];
+  chrome.scripting.registerContentScripts = async (list) => { regs.push(...list); };
+  store.set(WPT.SETTINGS_KEY, { apiKey: 'sk-keep', batchChars: 1200, batchItems: 16, autoTranslate: true, autoSites: ['example.com'], neverSites: ['ads.example.com'] });
+  store.set(WPT.CACHE_PREFIX + 'old', '旧译文');
+  store.set(WPT.CACHE_META_KEY, { v: 1, order: [[WPT.CACHE_PREFIX + 'old', 3]] });
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  listeners.installed.forEach((fn) => fn({ reason: 'update' }));
+  await settle();
+  const s = store.get(WPT.SETTINGS_KEY);
+  assert.equal(s.settingsRev, WPT.SETTINGS_REV);
+  assert.equal(s.batchChars, 2000);
+  assert.equal(s.apiKey, 'sk-keep');
+  assert.equal(store.has(WPT.CACHE_PREFIX + 'old'), false, '旧缓存已清空');
+  // 自动翻译只注册到名单内的网站
+  const reg = regs[regs.length - 1];
+  assert.deepEqual(reg.matches, ['*://example.com/*', '*://*.example.com/*']);
+  assert.deepEqual(reg.excludeMatches, ['*://ads.example.com/*', '*://*.ads.example.com/*']);
+  // 已迁移：再次触发不会清缓存
+  store.set(WPT.CACHE_PREFIX + 'new', '新译文');
+  listeners.installed.forEach((fn) => fn({ reason: 'update' }));
+  await settle();
+  assert.equal(store.has(WPT.CACHE_PREFIX + 'new'), true, '迁移只执行一次');
 });

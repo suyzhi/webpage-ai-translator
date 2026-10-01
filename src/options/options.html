@@ -59,6 +59,7 @@
           <label class="label" for="model"><span>模型</span></label>
           <input type="text" id="model" list="modelList" placeholder="gpt-4o-mini" spellcheck="false">
           <datalist id="modelList"></datalist>
+          <div class="hint warn-text hidden" id="modelWarn">这看起来是推理（思考）模型：翻译用不上推理，思考消耗的 token 常是译文的数倍。建议改用非推理模型，如 <code>deepseek-chat</code>。</div>
         </div>
       </div>
 
@@ -151,8 +152,20 @@
         <label class="toggle"><input type="checkbox" id="lazyTranslate"><span class="track"></span></label>
       </div>
       <div class="switch">
-        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭）</small></div>
+        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭）；也可在弹出面板里对当前网站单独开关</small></div>
         <label class="toggle"><input type="checkbox" id="autoTranslate"><span class="track"></span></label>
+      </div>
+      <div class="grid2 site-lists">
+        <div class="field">
+          <label class="label" for="autoSites"><span>仅对这些网站自动翻译</span></label>
+          <textarea id="autoSites" rows="3" spellcheck="false" placeholder="每行一个，如&#10;nytimes.com&#10;reddit.com"></textarea>
+          <div class="hint">留空 = 所有网站。包含子域名。</div>
+        </div>
+        <div class="field">
+          <label class="label" for="neverSites"><span>从不自动翻译这些网站</span></label>
+          <textarea id="neverSites" rows="3" spellcheck="false" placeholder="每行一个，如&#10;bilibili.com"></textarea>
+          <div class="hint">优先级最高；手动翻译不受影响。</div>
+        </div>
       </div>
       <div class="switch">
         <div class="text">插入动画<small>译文按阅读顺序依次浮现，待翻译段落显示加载指示（跟随系统「减少动态效果」）</small></div>
@@ -239,6 +252,11 @@
         <button class="btn" id="refreshStats" type="button">刷新统计</button>
         <button class="btn btn-danger" id="clearCache" type="button">清空缓存</button>
         <div class="grow muted" id="cacheStats">—</div>
+      </div>
+
+      <div class="row cache-row">
+        <button class="btn" id="resetUsage" type="button">用量清零</button>
+        <div class="grow muted" id="usageStats">—</div>
       </div>
     </section>
 

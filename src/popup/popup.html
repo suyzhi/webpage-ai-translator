@@ -46,6 +46,7 @@
     <div class="grow">
       <div class="status-row"><span class="pill" id="statusPill">未翻译</span></div>
       <div class="detail truncate" id="statusDetail"></div>
+      <div class="usage truncate" id="usageLine" title="token 用量：本页 / 累计（输入含命中缓存部分）"></div>
     </div>
     <div class="bar hidden-bar" id="progressBar"><i></i></div>
   </section>
@@ -81,12 +82,17 @@
         <button type="button" class="chip" data-value="16">16</button>
         <button type="button" class="chip" data-value="32">32</button>
       </div>
-      <div class="hint">同一密钥的所有标签页共享此上限；触发限流会自动降速。建议 3–8。</div>
+      <div class="hint" title="同一密钥的所有标签页共享此上限；触发限流会自动降速">所有标签页共享此上限，限流时自动降速；建议 3–8</div>
     </div>
   </section>
 
   <footer class="foot">
     <a href="#" class="muted tiny" id="shortcut" title="快捷键：翻译 / 还原（点击修改）"><kbd>⌥</kbd> <kbd>A</kbd></a>
+    <a href="#" class="tiny shortcut-warn hidden" id="shortcutWarn" title="浏览器保留了旧的快捷键绑定，点击前往设置">快捷键未更新</a>
+    <label class="site-auto hidden" id="siteAutoRow">
+      <span class="toggle mini"><input type="checkbox" id="siteAuto"><span class="track"></span></span>
+      <span class="tiny">自动翻译此站</span>
+    </label>
     <span class="grow"></span>
     <a href="#" class="tiny" id="footOptions">全部设置 →</a>
   </footer>

@@ -105,6 +105,7 @@
   async function refresh() {
     live = await statusOf(tab && tab.id);
     render();
+    renderUsage();
   }
 
   async function ensureInjected() {
@@ -199,18 +200,31 @@
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     tab = tabs && tabs[0] ? tabs[0] : null;
+    renderSiteAuto();
+    loadTotalUsage();
     live = await statusOf(tab && tab.id);
     render();
     pollTimer = setInterval(refresh, 600);
   }
 
   /* 显示实际生效的快捷键（用户可能改过，或因冲突未分配）；点击跳到浏览器的快捷键设置页 */
+  // 旧版本的默认绑定（macOS 显示为符号）；用户自己改成别的键时不提示
+  const STALE_SHORTCUTS = ['⌥⇧T', 'Alt+Shift+T', ''];
+  function openShortcutSettings(e) {
+    e.preventDefault();
+    chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+  }
+
   function showShortcut() {
     const el = $('shortcut');
     if (!el || !chrome.commands || !chrome.commands.getAll) return;
     chrome.commands.getAll(function (cmds) {
       const c = (cmds || []).filter(function (x) { return x.name === 'toggle-translate'; })[0];
       const key = c && c.shortcut;
+      // 从旧版本升级时浏览器会保留旧绑定（如 ⌥⇧T），扩展无法自行修改，只能提示用户手动设置
+      const stale = STALE_SHORTCUTS.indexOf(key || '') >= 0;
+      $('shortcutWarn').classList.toggle('hidden', !stale);
+      el.classList.toggle('hidden', stale);             // 旧绑定不再展示，由提示取代
       el.textContent = '';
       if (!key) { el.textContent = '设置快捷键'; return; }
       // macOS 返回「⌥A」这样的符号串，其他平台返回「Alt+A」
@@ -222,14 +236,64 @@
         el.appendChild(k);
       });
     });
-    el.addEventListener('click', function (e) {
-      e.preventDefault();
-      chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
-    });
+    el.addEventListener('click', openShortcutSettings);
+    $('shortcutWarn').addEventListener('click', openShortcutSettings);
+  }
+
+  /* ---------------- token 用量 ---------------- */
+  let totalUsage = null;
+
+  function fmtTokens(n) {
+    n = n || 0;
+    if (n < 1000) return String(n);
+    if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'K';
+    return (n / 1e6).toFixed(2) + 'M';
+  }
+
+  function renderUsage() {
+    const page = live && live.usage;
+    const parts = [];
+    if (page && (page.input || page.output)) {
+      const hit = page.input ? Math.round(page.cached / page.input * 100) : 0;
+      parts.push('本页 ' + fmtTokens(page.input + page.output) + ' token' + (hit ? '（缓存命中 ' + hit + '%）' : ''));
+    }
+    if (totalUsage && (totalUsage.input || totalUsage.output)) parts.push('累计 ' + fmtTokens(totalUsage.input + totalUsage.output));
+    $('usageLine').textContent = parts.join(' · ');
+  }
+
+  function loadTotalUsage() {
+    chrome.storage.local.get(NS.USAGE_KEY).then(function (got) {
+      totalUsage = got[NS.USAGE_KEY] || null;
+      renderUsage();
+    }).catch(function () {});
+  }
+
+  /* ---------------- 自动翻译此网站 ---------------- */
+  function tabHost() {
+    try {
+      const u = new URL(tab && tab.url);
+      return /^https?:$/.test(u.protocol) ? NS.settings.normalizeHost(u.hostname) : '';
+    } catch (e) { return ''; }
+  }
+
+  function renderSiteAuto() {
+    const host = tabHost();
+    $('siteAutoRow').classList.toggle('hidden', !host);
+    if (!host || !settings) return;
+    $('siteAuto').checked = NS.settings.autoAllowed(settings, host);
+    $('siteAutoRow').title = '打开 ' + host + ' 时自动翻译' + (settings.autoTranslate && !settings.autoSites.length ? '（当前对所有网站自动翻译）' : '');
   }
 
   /* 事件绑定 */
   showShortcut();
+  $('siteAuto').addEventListener('change', function () {
+    const host = tabHost();
+    if (!host || !settings) return;
+    save(NS.settings.siteAutoPatch(settings, host, this.checked)).then(renderSiteAuto);
+  });
+  chrome.storage.onChanged.addListener(function (changes, area) {
+    if (area === 'local' && changes[NS.USAGE_KEY]) { totalUsage = changes[NS.USAGE_KEY].newValue || null; renderUsage(); }
+  });
   $('mainBtn').addEventListener('click', onMain);
   $('restoreBtn').addEventListener('click', onRestore);
   $('openOptions').addEventListener('click', function () { chrome.runtime.openOptionsPage(); });

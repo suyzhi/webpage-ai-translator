@@ -113,8 +113,29 @@
     }
   }
 
+  /*
+   * 统一用量口径：input = 全部输入 token（含命中缓存部分），cached = 命中提示词缓存的部分，output = 输出（含思考）。
+   * DeepSeek: prompt_cache_hit_tokens；OpenAI: prompt_tokens_details.cached_tokens；
+   * Anthropic: input_tokens 不含缓存读写，需相加。
+   */
+  function openaiUsage(u) {
+    if (!u) return null;
+    const details = u.prompt_tokens_details || {};
+    return {
+      input: u.prompt_tokens || 0,
+      output: u.completion_tokens || 0,
+      cached: u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (details.cached_tokens || 0)
+    };
+  }
+
+  function anthropicUsage(u) {
+    if (!u) return null;
+    const read = u.cache_read_input_tokens || 0;
+    return { input: (u.input_tokens || 0) + read + (u.cache_creation_input_tokens || 0), output: u.output_tokens || 0, cached: read };
+  }
+
   /* ---------------- OpenAI 兼容 (/chat/completions) ---------------- */
-  async function callOpenAI(settings, messages, signal) {
+  async function callOpenAI(settings, messages, signal, meta) {
     const url = U.joinUrl(settings.baseUrl, '/chat/completions');
     const headers = { 'Content-Type': 'application/json' };
     if (settings.apiKey) headers['Authorization'] = 'Bearer ' + settings.apiKey;
@@ -135,12 +156,17 @@
     if (!res.ok) throw makeError(res.status, extractError(parsed.json, parsed.text), res.headers);
     const data = parsed.json;
     if (!data) throw makeError(502, '返回内容不是合法 JSON：' + U.truncate(parsed.text, 200), res.headers);
+    if (meta) meta.usage = openaiUsage(data.usage);
     const choice = data.choices && data.choices[0];
     const msg = choice && (choice.message || choice.delta || choice);
     let content = msg && msg.content;
     if (Array.isArray(content)) content = content.map(function (p) { return (p && p.text) || ''; }).join('');
-    if (typeof content !== 'string' || !content) {
-      if (msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content) content = msg.reasoning_content;
+    // 只有思考过程、没有正文：推理模型（或思考耗尽了输出上限）。把思考当译文只会解析失败、反复重试烧 token，
+    // 直接按致命错误停下并提示换模型。
+    if ((typeof content !== 'string' || !content) && msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+      const err = new Error('模型只返回了思考过程、没有译文：请改用非推理模型（如 deepseek-chat），推理模型翻译费用高数倍');
+      err.fatal = true;
+      throw err;
     }
     if (typeof content !== 'string') {
       const err = new Error('模型未返回文本内容（请检查模型名是否为对话模型）：' + U.truncate(JSON.stringify(data), 200));
@@ -151,7 +177,7 @@
   }
 
   /* ---------------- Anthropic (/messages) ---------------- */
-  async function callAnthropic(settings, messages, signal) {
+  async function callAnthropic(settings, messages, signal, meta) {
     const url = U.joinUrl(settings.baseUrl, '/messages');
     const headers = {
       'Content-Type': 'application/json',
@@ -174,12 +200,14 @@
       err.retryable = true;
       throw err;
     }
+    if (meta) meta.usage = anthropicUsage(data.usage);
     const text = data.content.filter(function (b) { return b && b.type === 'text'; })
       .map(function (b) { return b.text || ''; }).join('');
     return text;
   }
 
-  async function call(settings, messages, signal) {
+  /* meta（可选）：调用成功后写入 meta.usage = { input, output, cached } */
+  async function call(settings, messages, signal, meta) {
     if (!settings.baseUrl) {
       const err = new Error('尚未配置接口地址 (Base URL)');
       err.fatal = true;
@@ -190,16 +218,17 @@
       err.fatal = true;
       throw err;
     }
-    if (settings.provider === 'anthropic') return callAnthropic(settings, messages, signal);
-    return callOpenAI(settings, messages, signal);
+    if (settings.provider === 'anthropic') return callAnthropic(settings, messages, signal, meta);
+    return callOpenAI(settings, messages, signal, meta);
   }
 
   /* 用于「测试连接」：发送最小请求 */
   async function probe(settings, signal) {
     const t = NS.prompt.buildTestMessages();
     const started = Date.now();
-    const out = await call(settings, { system: t.system, user: t.user, maxTokens: 64 }, signal);
-    return { text: out.trim(), ms: Date.now() - started };
+    const meta = {};
+    const out = await call(settings, { system: t.system, user: t.user, maxTokens: 64 }, signal, meta);
+    return { text: out.trim(), ms: Date.now() - started, usage: meta.usage || null };
   }
 
   function estimateMaxTokens(userText) {

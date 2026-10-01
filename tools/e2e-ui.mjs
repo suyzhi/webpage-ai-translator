@@ -94,6 +94,17 @@ async function main() {
     const saved = await cdp.evalIn(bootSession, '(async () => { const g = await chrome.storage.local.get("wpt.settings.v1"); return g["wpt.settings.v1"].concurrency; })()');
     check('options：点击 8 档后设置已保存', saved === 8, 'concurrency=' + saved);
 
+    // 推理模型提示：普通模型不显示，填入推理模型后显示（之后改回，避免影响后续截图）
+    const warnVisible = () => cdp.evalIn(bootSession, 'getComputedStyle(document.getElementById("modelWarn")).display !== "none"');
+    const setModel = (m) => cdp.evalIn(bootSession, '(function(){ const el = document.getElementById("model"); el.value = ' + JSON.stringify(m) + '; el.dispatchEvent(new Event("change")); return true; })()');
+    check('options：普通模型不显示推理模型提示', !(await warnVisible()));
+    const prevModel = await cdp.evalIn(bootSession, 'document.getElementById("model").value');
+    await setModel('deepseek-reasoner');
+    await sleep(500);
+    check('options：推理模型显示提示', await warnVisible());
+    await setModel(prevModel);
+    await sleep(500);
+
     await freezeTransitions(cdp, bootSession);
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, bootSession);
     await sleep(300);
@@ -132,6 +143,8 @@ async function main() {
     check('popup：并发快捷档位 5 个', pop.concPresets === 5, pop.concPresets);
     check('popup：存在还原按钮', pop.hasRestore, pop.hasRestore);
     check('popup：显示当前状态', !!pop.pill, pop.pill + ' / ' + pop.main);
+    const popH = await cdp.evalIn(popSession, 'Math.ceil(document.querySelector(".foot").getBoundingClientRect().bottom + window.scrollY)');
+    check('popup：内容高度不超过浏览器弹窗上限 600px（不出现滚动条）', popH <= 600, 'height=' + popH);
     const popFile = await shot(cdp, popSession, 'popup.png');
     log('popup 截图：' + popFile + '；状态=' + pop.pill + '，主按钮=' + pop.main);
 

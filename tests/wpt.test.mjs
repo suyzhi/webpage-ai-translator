@@ -331,3 +331,46 @@ test('预设服务商字段完整', () => {
   }
   assert.ok(WPT.PRESETS.some((p) => p.baseUrl.includes('deepseek')));
 });
+
+/* ---------------- 设置迁移与网站名单 ---------------- */
+test('settings：旧版默认批次大小一次性迁移，用户自定义值与已迁移的设置不动', () => {
+  const S = WPT.settings;
+  const old = S.normalize({ batchChars: 1200, batchItems: 16 });
+  assert.equal(old.batchChars, 2000);
+  assert.equal(old.batchItems, 24);
+  assert.equal(old.settingsRev, WPT.SETTINGS_REV);
+  const custom = S.normalize({ batchChars: 1500, batchItems: 10 });
+  assert.equal(custom.batchChars, 1500);
+  assert.equal(custom.batchItems, 10);
+  assert.equal(S.normalize({ batchChars: 1200, batchItems: 16, settingsRev: 2 }).batchChars, 1200, '迁移后用户再改回 1200 应保留');
+});
+
+test('settings：网站名单规范化与匹配（含子域名）', () => {
+  const S = WPT.settings;
+  const s = S.normalize({ autoTranslate: true, autoSites: 'https://www.Example.com/path\n*.foo.org, 127.0.0.1:8080\nexample.com', neverSites: ['ads.example.com'] });
+  assert.deepEqual(s.autoSites, ['example.com', 'foo.org', '127.0.0.1']);
+  assert.equal(S.autoAllowed(s, 'news.example.com'), true);
+  assert.equal(S.autoAllowed(s, 'notexample.com'), false, '不能按后缀误匹配');
+  assert.equal(S.autoAllowed(s, 'x.ads.example.com'), false, '排除名单优先');
+  assert.equal(S.autoAllowed(S.normalize({ autoTranslate: true }), 'any.com'), true, '名单为空 = 所有网站');
+  assert.equal(S.autoAllowed(S.normalize({ autoTranslate: false, autoSites: ['a.com'] }), 'a.com'), false, '总开关优先');
+});
+
+test('settings：弹出面板「自动翻译此网站」开关不会意外变成全站自动翻译', () => {
+  const S = WPT.settings;
+  const off = S.normalize({});
+  const on = S.normalize(Object.assign({}, off, S.siteAutoPatch(off, 'www.a.com', true)));
+  assert.equal(on.autoTranslate, true);
+  assert.deepEqual(on.autoSites, ['a.com']);
+  const back = S.normalize(Object.assign({}, on, S.siteAutoPatch(on, 'a.com', false)));
+  assert.equal(back.autoTranslate, false, '名单清空时关闭总开关，而不是变成所有网站');
+  const all = S.normalize({ autoTranslate: true });
+  const excl = S.normalize(Object.assign({}, all, S.siteAutoPatch(all, 'b.com', false)));
+  assert.equal(S.autoAllowed(excl, 'b.com'), false);
+  assert.equal(S.autoAllowed(excl, 'c.com'), true);
+});
+
+test('isReasoningModel：识别推理模型，不误伤普通对话模型', () => {
+  for (const m of ['deepseek-reasoner', 'deepseek-r1', 'o3-mini', 'openai/o1', 'gpt-5', 'qwq-32b', 'qwen3-235b-a22b-thinking-2507']) assert.equal(WPT.isReasoningModel(m), true, m);
+  for (const m of ['deepseek-chat', 'gpt-4o-mini', 'gpt-5-chat-latest', 'claude-3-5-haiku-latest', 'glm-4-flash', 'llama-3.3-70b-versatile', '']) assert.equal(WPT.isReasoningModel(m), false, m);
+});

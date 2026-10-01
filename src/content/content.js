@@ -61,6 +61,7 @@
     announce: false,            // 本轮是否由用户发起（决定是否显示进度 / 完成提示）
     memo: new Map(),            // 原文 -> 译文（null 表示模型原样返回，无需显示）
     memoSig: '',
+    usage: { input: 0, output: 0, cached: 0 },   // 本页累计 token 用量（还原后保留：已花出去的就是花了）
     originalTitle: null
   };
 
@@ -548,6 +549,11 @@
     state.reconnectTries = 0;
     if (msg.type === NS.MSG.RESULTS) {
       queueRender(msg.entries);
+    } else if (msg.type === NS.MSG.USAGE) {
+      const u = msg.usage || {};
+      state.usage.input += u.input || 0;
+      state.usage.output += u.output || 0;
+      state.usage.cached += u.cached || 0;
     } else if (msg.type === NS.MSG.DONE) {
       onJobDone(msg);
     } else if (msg.type === NS.MSG.ERROR) {
@@ -1013,7 +1019,8 @@
       translated: state.nodes.size,
       targetLang: state.settings ? state.settings.targetLang : null,
       displayMode: state.settings ? state.settings.displayMode : null,
-      error: state.error
+      error: state.error,
+      usage: state.usage
     };
   }
 
@@ -1057,6 +1064,6 @@
 
   /* 自动翻译模式（动态注册内容脚本时） */
   NS.settings.get().then(function (s) {
-    if (s.autoTranslate) start(null);
+    if (NS.settings.autoAllowed(s, location.hostname)) start(null);
   }).catch(function () {});
 })();

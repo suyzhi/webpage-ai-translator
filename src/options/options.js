@@ -8,6 +8,7 @@
     'timeoutMs', 'minTextLength', 'temperature', 'cacheMaxEntries'];
   const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'lazyTranslate', 'autoTranslate', 'animations', 'useCache'];
   const TEXT_FIELDS = ['provider', 'baseUrl', 'apiKey', 'model', 'targetLang', 'sourceLang', 'customPrompt'];
+  const SITE_FIELDS = ['autoSites', 'neverSites'];   // 文本框里每行一个，存储为规范化后的数组
 
   let settings = null;
   let saveTimer = null;
@@ -98,6 +99,11 @@
     for (let i = 0; i < NUM_FIELDS.length; i++) $(NUM_FIELDS[i]).value = settings[NUM_FIELDS[i]];
     for (let i = 0; i < BOOL_FIELDS.length; i++) $(BOOL_FIELDS[i]).checked = !!settings[BOOL_FIELDS[i]];
     for (let i = 0; i < TEXT_FIELDS.length; i++) $(TEXT_FIELDS[i]).value = settings[TEXT_FIELDS[i]] || '';
+    for (let i = 0; i < SITE_FIELDS.length; i++) {
+      const el = $(SITE_FIELDS[i]);
+      if (document.activeElement !== el) el.value = settings[SITE_FIELDS[i]].join('\n');   // 正在输入时不回写，免得吞掉换行
+    }
+    $('modelWarn').classList.toggle('hidden', !NS.isReasoningModel(settings.model));
     updateConc(settings.concurrency);
     setSeg('displaySeg', settings.displayMode);
     setSeg('markSeg', settings.markStyle);
@@ -146,6 +152,7 @@
     for (let i = 0; i < NUM_FIELDS.length; i++) patch[NUM_FIELDS[i]] = Number($(NUM_FIELDS[i]).value);
     for (let i = 0; i < BOOL_FIELDS.length; i++) patch[BOOL_FIELDS[i]] = $(BOOL_FIELDS[i]).checked;
     for (let i = 0; i < TEXT_FIELDS.length; i++) patch[TEXT_FIELDS[i]] = $(TEXT_FIELDS[i]).value;
+    for (let i = 0; i < SITE_FIELDS.length; i++) patch[SITE_FIELDS[i]] = $(SITE_FIELDS[i]).value;
     return patch;
   }
 
@@ -164,6 +171,11 @@
     }
     for (let i = 0; i < BOOL_FIELDS.length; i++) {
       $(BOOL_FIELDS[i]).addEventListener('change', function () { save(collect(), true); });
+    }
+    for (let i = 0; i < SITE_FIELDS.length; i++) {
+      const el = $(SITE_FIELDS[i]);
+      el.addEventListener('input', function () { scheduleSave(collect()); });
+      el.addEventListener('blur', function () { save(collect(), true); });   // 失焦后回写规范化结果
     }
     for (let i = 0; i < TEXT_FIELDS.length; i++) {
       const el = $(TEXT_FIELDS[i]);
@@ -244,6 +256,15 @@
     });
 
     $('refreshStats').addEventListener('click', refreshStats);
+    $('resetUsage').addEventListener('click', async function () {
+      if (!confirm('确定把累计 token 用量清零吗？')) return;
+      await chrome.runtime.sendMessage({ type: NS.MSG.USAGE_RESET });
+      toast('用量已清零');
+      refreshUsage();
+    });
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area === 'local' && changes[NS.USAGE_KEY]) refreshUsage();
+    });
     $('clearCache').addEventListener('click', async function () {
       const resp = await chrome.runtime.sendMessage({ type: NS.MSG.CACHE_CLEAR });
       toast(resp && resp.ok ? '缓存已清空' : '清空失败');
@@ -289,6 +310,26 @@
     }
   }
 
+  function fmtTokens(n) {
+    n = n || 0;
+    if (n < 1000) return String(n);
+    if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'K';
+    return (n / 1e6).toFixed(2) + 'M';
+  }
+
+  async function refreshUsage() {
+    try {
+      const got = await chrome.storage.local.get(NS.USAGE_KEY);
+      const u = got[NS.USAGE_KEY];
+      if (!u || !(u.input || u.output)) { $('usageStats').textContent = '累计 token 用量：暂无'; return; }
+      const hit = u.input ? Math.round(u.cached / u.input * 100) : 0;
+      $('usageStats').textContent = '累计 token：输入 ' + fmtTokens(u.input) + '（缓存命中 ' + hit + '%）· 输出 ' + fmtTokens(u.output) +
+        ' · ' + u.requests + ' 次请求 · 自 ' + new Date(u.since).toLocaleDateString();
+    } catch (e) {
+      $('usageStats').textContent = '用量不可用';
+    }
+  }
+
   (async function init() {
     fillLanguages();
     fillPresets();
@@ -297,6 +338,7 @@
     bindEvents();
     initTabs();
     refreshStats();
+    refreshUsage();
   })().catch(function (e) {
     toast('初始化失败：' + ((e && e.message) || e));
   });

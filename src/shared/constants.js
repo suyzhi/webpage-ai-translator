@@ -13,6 +13,8 @@
   NS.SETTINGS_KEY = 'wpt.settings.v1';
   NS.CACHE_PREFIX = 'wpt.c.';
   NS.CACHE_META_KEY = 'wpt.cache.meta.v1';
+  NS.USAGE_KEY = 'wpt.usage.v1';
+  NS.SETTINGS_REV = 2;           // 设置结构修订号：低于此值的已存设置会做一次性迁移
 
   NS.MSG = {
     PING: 'wpt:ping',
@@ -29,7 +31,9 @@
     TEST_CONNECTION: 'wpt:test-connection',
     INJECT: 'wpt:inject',
     TOGGLE: 'wpt:toggle',
-    NOTIFY: 'wpt:notify'
+    NOTIFY: 'wpt:notify',
+    USAGE: 'wpt:usage',
+    USAGE_RESET: 'wpt:usage-reset'
   };
 
   NS.STATUS = {
@@ -68,6 +72,8 @@
     cacheMaxEntries: 4000,
     // ---- 其他 ----
     autoTranslate: false,
+    autoSites: [],                 // 自动翻译仅限这些网站（空 = 所有网站）
+    neverSites: [],                // 从不自动翻译的网站
     animations: true
   };
 
@@ -180,6 +186,17 @@
 
   NS.LANG_MAP = Object.create(null);
   for (const l of NS.LANGUAGES) NS.LANG_MAP[l.code] = l;
+
+  /*
+   * 推理（思考）模型：翻译用不上推理，思考 token 往往是译文的数倍。
+   * 用于设置页提示；gpt-5-chat 系列是非推理模型，不在此列。
+   */
+  NS.isReasoningModel = function (model) {
+    const m = String(model || '').toLowerCase();
+    if (!m) return false;
+    if (/gpt-5[\w.-]*chat/.test(m)) return false;
+    return /reasoner|thinking|qwq|(^|[\/:_-])r1($|[\/:_-])|(^|\/)o[1-9](-|$)|(^|\/)gpt-5/.test(m);
+  };
 
   NS.langName = function (code, forPrompt) {
     const l = NS.LANG_MAP[code];

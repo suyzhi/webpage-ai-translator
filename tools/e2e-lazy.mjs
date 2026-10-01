@@ -3,7 +3,9 @@
  * 省 token 行为的端到端测试（零依赖，Node 18+）：
  *   1. 按需翻译：长页面只请求视口附近的段落，滚动到底部后才请求底部段落，中间跳过的不请求；
  *   2. 原文持续改写（模拟 AI 聊天流式输出）：等文本稳定后只重译一次，而不是每次变动都重译；
- *   3. 快捷键同款的 toggle：已翻译时再次触发即还原。
+ *   3. 快捷键同款的 toggle：已翻译时再次触发即还原；
+ *   4. token 用量：本页用量上报到内容脚本，累计用量写入存储；
+ *   5. 按网站自动翻译：名单外的网站不注入脚本，名单内的网站打开即翻译。
  *
  * 用法：node tools/e2e-lazy.mjs   （CHROME_PATH 可指定浏览器）
  * 退出码：0 全部通过；1 断言失败；2 未找到浏览器。
@@ -57,8 +59,11 @@ async function main() {
     const lazyTexts = async () => (await httpJson(MOCK + '/__stats')).texts.filter((t) => t.indexOf('Lazy paragraph number') === 0);
 
     await cdp.evalIn(optSession, '(async () => chrome.runtime.sendMessage({ type: "wpt:inject", tabId: ' + tabQuery + ', toggle: true }))()');
-    await waitDone('首屏翻译完成');
+    const firstState = await waitDone('首屏翻译完成');
     await delay(800);
+    check('用量：本页用量已上报', firstState.usage && firstState.usage.input > 0 && firstState.usage.output > 0, JSON.stringify(firstState.usage));
+    const total = await cdp.evalIn(optSession, '(async () => (await chrome.storage.local.get("wpt.usage.v1"))["wpt.usage.v1"])()');
+    check('用量：累计用量已写入存储', total && total.input >= firstState.usage.input && total.cached > 0, JSON.stringify(total));
     const first = await lazyTexts();
     check('按需翻译：首屏阶段远处段落没有被请求', first.length < N / 3, 'requested=' + first.length + '/' + N);
 
@@ -85,6 +90,20 @@ async function main() {
     const left = await cdp.evalIn(ps, 'document.querySelectorAll(".wpt-translation").length');
     const st = await send('wpt:state');
     check('toggle：已翻译时再次触发即还原', left === 0 && st.status === 'idle', 'left=' + left + ' status=' + st.status);
+
+    // 按网站自动翻译
+    const setAuto = (sites) => cdp.evalIn(optSession, '(async () => { const k = "wpt.settings.v1"; const s = (await chrome.storage.local.get(k))[k]; s.autoTranslate = true; s.autoSites = ' + JSON.stringify(sites) + '; await chrome.storage.local.set({ [k]: s }); return true; })()');
+    const stateAt = (url) => cdp.evalIn(optSession, '(async () => { const t = (await chrome.tabs.query({ url: "' + url + '" }))[0]; if (!t) return null; try { return await chrome.tabs.sendMessage(t.id, { type: "wpt:state" }); } catch (e) { return null; } })()');
+    await setAuto(['example.com']);
+    await delay(600);
+    await cdp.send('Target.createTarget', { url: MOCK + '/demo/test-page.html?off' });
+    await delay(2500);
+    check('按网站自动翻译：名单外的网站不注入、不翻译', (await stateAt(MOCK + '/demo/test-page.html?off')) === null);
+    await setAuto(['127.0.0.1']);
+    await delay(600);
+    await cdp.send('Target.createTarget', { url: MOCK + '/demo/test-page.html?on' });
+    const auto = await waitFor('名单内网站自动翻译', async () => { const s = await stateAt(MOCK + '/demo/test-page.html?on'); return s && s.status === 'done' ? s : null; }, 30000, 400).catch(() => null);
+    check('按网站自动翻译：名单内的网站打开即翻译', auto && auto.translated > 0, auto ? 'translated=' + auto.translated : 'not translated');
   } catch (err) {
     check('端到端流程抛出异常', false, err && err.message);
     if (browser && browser.stderr.length) console.error(browser.stderr.join('').slice(-1500));

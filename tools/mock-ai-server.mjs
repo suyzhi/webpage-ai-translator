@@ -95,7 +95,11 @@ const server = http.createServer((req, res) => {
           id: 'mock-completion', object: 'chat.completion', created: Math.floor(Date.now() / 1000),
           model: json.model || 'mock',
           choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          // 粗略估算（约 4 字符 / token），让端到端测试能验证用量统计链路
+          usage: (() => {
+            const p = Math.ceil(user.length / 4) + 50, c = Math.ceil(content.length / 4);
+            return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c, prompt_cache_hit_tokens: 50 };
+          })()
         }));
       }, DELAY);
     });
