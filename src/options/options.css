@@ -36,6 +36,13 @@ body { padding: 26px 18px 60px; }
 .test-result.err { color: var(--err); }
 .test-result.pending { color: var(--fg-soft); }
 
+.site-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 220px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+.site-list li { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; font-size: 12.5px; border-top: 1px solid var(--line-soft); }
+.site-list li:first-child { border-top: 0; }
+.site-list li > .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-list li.empty { color: var(--fg-faint); padding: 7px 10px; }
+.site-list .btn { padding: 3px 8px; font-size: 12px; }
+
 .cache-row { margin-top: 12px; align-items: center; }
 .cache-row .muted { font-size: 12px; padding-left: 4px; }
 

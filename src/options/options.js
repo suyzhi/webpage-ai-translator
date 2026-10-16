@@ -8,6 +8,8 @@
     'timeoutMs', 'minTextLength', 'temperature', 'cacheMaxEntries'];
   const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'autoTranslate', 'animations', 'useCache'];
   const TEXT_FIELDS = ['provider', 'baseUrl', 'apiKey', 'model', 'targetLang', 'sourceLang', 'customPrompt'];
+  const SITE_KINDS = ['always', 'never'];
+  const SITE_LABEL = { always: '总是翻译', never: '从不翻译' };
 
   let settings = null;
   let saveTimer = null;
@@ -102,7 +104,55 @@
     setSeg('displaySeg', settings.displayMode);
     setSeg('markSeg', settings.markStyle);
     markPreset();
+    renderSiteRules();
     $('version').textContent = 'AI 网页翻译 v' + NS.VERSION;
+  }
+
+  /* ---------------- 网站规则 ---------------- */
+  function renderSiteRules() {
+    const rules = settings.siteRules || {};
+    for (let k = 0; k < SITE_KINDS.length; k++) {
+      const kind = SITE_KINDS[k];
+      const hosts = Object.keys(rules).filter(function (h) { return rules[h] === kind; }).sort();
+      const list = $(kind + 'List');
+      list.innerHTML = '';
+      if (!hosts.length) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = '暂无';
+        list.appendChild(li);
+      }
+      for (let i = 0; i < hosts.length; i++) {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'mono';
+        name.textContent = hosts[i];
+        name.title = hosts[i];
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-ghost';
+        del.dataset.host = hosts[i];
+        del.textContent = '移除';
+        li.appendChild(name);
+        li.appendChild(del);
+        list.appendChild(li);
+      }
+      $(kind + 'Count').textContent = hosts.length ? hosts.length + ' 个' : '';
+    }
+  }
+
+  async function addSiteRule(kind) {
+    const input = $(kind + 'Input');
+    const raw = input.value.trim();
+    if (!raw) return;
+    const host = NS.util.normalizeHost(raw);
+    if (!host) { toast('无法识别的域名：' + raw); return; }
+    const prev = settings.siteRules[host];
+    settings = await NS.settings.setSiteRule(host, kind);
+    renderSiteRules();
+    if (settings.siteRules[host] !== kind) { toast('网站规则已达上限（' + NS.SITE_RULES_MAX + ' 条）'); return; }
+    input.value = '';
+    toast(prev && prev !== kind ? host + ' 已改为' + SITE_LABEL[kind] : '已添加 ' + host);
   }
 
   function setSeg(id, value) {
@@ -177,6 +227,24 @@
       save({ markStyle: b.dataset.value }, true);
     });
 
+    for (let k = 0; k < SITE_KINDS.length; k++) {
+      const kind = SITE_KINDS[k];
+      $(kind + 'Add').addEventListener('click', function () { addSiteRule(kind); });
+      $(kind + 'Input').addEventListener('keydown', function (e) { if (e.key === 'Enter') addSiteRule(kind); });
+      $(kind + 'List').addEventListener('click', async function (e) {
+        const b = e.target.closest('button[data-host]');
+        if (!b) return;
+        settings = await NS.settings.setSiteRule(b.dataset.host, null);
+        renderSiteRules();
+        toast('已移除 ' + b.dataset.host);
+      });
+    }
+    // 弹出面板里修改的网站规则同步到列表
+    NS.settings.onChange(function (s) {
+      settings.siteRules = s.siteRules;
+      renderSiteRules();
+    });
+
     $('toggleKey').addEventListener('click', function () {
       const el = $('apiKey');
       const show = el.type === 'password';
@@ -216,7 +284,7 @@
       refreshStats();
     });
     $('resetBtn').addEventListener('click', async function () {
-      if (!confirm('确定恢复默认设置吗？API 密钥也会被清除。')) return;
+      if (!confirm('确定恢复默认设置吗？API 密钥与网站规则也会被清除。')) return;
       settings = await NS.settings.reset();
       applyToForm();
       toast('已恢复默认设置');

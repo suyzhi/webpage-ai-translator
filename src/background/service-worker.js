@@ -72,11 +72,19 @@ importScripts(
     return '注入失败：' + U.truncate(m, 120);
   }
 
+  /*
+   * 手动「翻译 / 还原」：刚注入的内容脚本没有可还原的译文，发 START 而不是 TOGGLE。
+   * 注入时内容脚本会按网站规则判定是否自动翻译，若已自动启动，START 会与之合并，TOGGLE 则会把它停掉。
+   */
+  function manualMessage(res) {
+    return { type: res.injected ? NS.MSG.START : NS.MSG.TOGGLE };
+  }
+
   async function toggleInTab(tab) {
     if (!tab || tab.id == null) return;
     const res = await ensureContent(tab.id);
     if (!res.ok) return;
-    try { await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.TOGGLE }); } catch (e) {}
+    try { await chrome.tabs.sendMessage(tab.id, manualMessage(res)); } catch (e) {}
   }
 
   /* ---------------- 任务 ---------------- */
@@ -200,7 +208,7 @@ importScripts(
             if (tabId == null) return sendResponse({ ok: false, error: '没有可用的标签页' });
             const res = await ensureContent(tabId);
             if (res.ok && msg.toggle) {
-              try { await chrome.tabs.sendMessage(tabId, { type: NS.MSG.TOGGLE }); } catch (e) {}
+              try { await chrome.tabs.sendMessage(tabId, manualMessage(res)); } catch (e) {}
             }
             return sendResponse(res);
           }
@@ -240,21 +248,40 @@ importScripts(
     return true;   // 异步响应
   });
 
-  /* ---------------- 自动翻译：动态注册内容脚本 ---------------- */
-  async function applyAutoRegistration() {
+  /* ---------------- 自动翻译：动态注册内容脚本 ----------------
+   * 注册范围由全局开关与网站规则决定（见 util.autoRegistrationFor）；
+   * 注册只是粗筛，内容脚本启动前还会按网站规则再判定一次。
+   */
+  let registering = Promise.resolve();
+
+  /* 串行执行：连续修改设置时，避免注销 / 注册交错导致 id 冲突或留下旧的注册 */
+  function applyAutoRegistration() {
+    registering = registering.then(doApplyAutoRegistration).catch(function () {});
+    return registering;
+  }
+
+  async function doApplyAutoRegistration() {
     const s = await NS.settings.get();
     try { await chrome.scripting.unregisterContentScripts({ ids: ['wpt-auto'] }); } catch (e) {}
-    if (!s.autoTranslate) return;
+    const reg = U.autoRegistrationFor(s);
+    if (!reg) return;
+    const script = {
+      id: 'wpt-auto',
+      js: NS.CONTENT_FILES.slice(),
+      matches: reg.matches,
+      runAt: 'document_idle',
+      allFrames: false,
+      persistAcrossSessions: true
+    };
+    if (reg.excludeMatches) script.excludeMatches = reg.excludeMatches;
     try {
-      await chrome.scripting.registerContentScripts([{
-        id: 'wpt-auto',
-        js: NS.CONTENT_FILES.slice(),
-        matches: ['http://*/*', 'https://*/*'],
-        runAt: 'document_idle',
-        allFrames: false,
-        persistAcrossSessions: true
-      }]);
-    } catch (e) { /* 已注册或权限不足 */ }
+      await chrome.scripting.registerContentScripts([script]);
+    } catch (e) {
+      // 已注册或权限不足；若带排除规则，退回到不排除，由内容脚本按网站规则自行跳过
+      if (!script.excludeMatches) return;
+      delete script.excludeMatches;
+      try { await chrome.scripting.registerContentScripts([script]); } catch (e2) {}
+    }
   }
 
   chrome.runtime.onInstalled.addListener(function (details) {
@@ -284,7 +311,8 @@ importScripts(
     if (area !== 'local' || !changes[NS.SETTINGS_KEY]) return;
     const next = changes[NS.SETTINGS_KEY].newValue || {};
     const prev = changes[NS.SETTINGS_KEY].oldValue || {};
-    if (!!next.autoTranslate !== !!prev.autoTranslate || (next.autoTranslate && next.targetLang !== prev.targetLang)) {
+    const regKey = function (v) { return JSON.stringify(U.autoRegistrationFor(v)); };
+    if (regKey(next) !== regKey(prev) || (next.autoTranslate && next.targetLang !== prev.targetLang)) {
       applyAutoRegistration();
     }
   });

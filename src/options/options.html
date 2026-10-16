@@ -112,7 +112,7 @@
         <label class="toggle"><input type="checkbox" id="translateTitle"><span class="track"></span></label>
       </div>
       <div class="switch">
-        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭）</small></div>
+        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭），可在下方「网站规则」中按网站例外</small></div>
         <label class="toggle"><input type="checkbox" id="autoTranslate"><span class="track"></span></label>
       </div>
       <div class="switch">
@@ -137,6 +137,34 @@
         <div class="label"><span>自定义提示词（可选）</span></div>
         <textarea id="customPrompt" placeholder="例如：专业术语保留英文原文；语气保持口语化。"></textarea>
       </div>
+    </section>
+
+    <!-- 网站规则 -->
+    <section class="card">
+      <div class="card-head">
+        <h2>网站规则</h2>
+        <p class="muted">按网站覆盖「自动翻译」开关：子域名沿用父域名的规则，更具体的域名优先；手动翻译不受影响。也可在弹出面板中为当前网站设置。</p>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <div class="label"><span>总是翻译</span><span class="muted" id="alwaysCount"></span></div>
+          <div class="row">
+            <input type="text" id="alwaysInput" class="grow" placeholder="example.com" spellcheck="false">
+            <button class="btn" id="alwaysAdd" type="button">添加</button>
+          </div>
+          <ul class="site-list" id="alwaysList"></ul>
+        </div>
+        <div class="field">
+          <div class="label"><span>从不翻译</span><span class="muted" id="neverCount"></span></div>
+          <div class="row">
+            <input type="text" id="neverInput" class="grow" placeholder="example.cn" spellcheck="false">
+            <button class="btn" id="neverAdd" type="button">添加</button>
+          </div>
+          <ul class="site-list" id="neverList"></ul>
+        </div>
+      </div>
+      <div class="hint">填写域名即可（如 <code>example.com</code>，同时覆盖其子域名）；粘贴完整网址会自动提取域名。</div>
     </section>
 
     <!-- 性能 -->

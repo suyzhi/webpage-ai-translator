@@ -67,8 +67,11 @@
     cacheMaxEntries: 4000,
     // ---- 其他 ----
     autoTranslate: false,
+    siteRules: {},                 // { 'example.com': 'always' | 'never' }，子域名继承
     animations: true
   };
+
+  NS.SITE_RULES_MAX = 500;
 
   NS.LIMITS = {
     concurrency: [1, 16],

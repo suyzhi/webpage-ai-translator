@@ -53,6 +53,7 @@ node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
 | 🚨 快速失败 | 401/403/404 判定为致命错误，立即停止全部请求，不浪费 token |
 | 🔄 动态页面 | MutationObserver 增量翻译 SPA / 无限滚动新加载的内容 |
 | 🎯 视口优先 | 先翻译用户正在看的内容（首批请求更小），首屏译文出现更快 |
+| 🧭 网站规则 | 按网站设置「总是翻译 / 从不翻译」，子域名沿用父域名的规则 |
 | 🔒 隐私安全 | 密钥只存在本机 `chrome.storage.local`，不经过任何中转服务器 |
 
 ---
@@ -83,6 +84,22 @@ node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
 
 弹出面板里可以快速调整 **目标语言**、**并发数量**、**显示方式（双语对照 / 仅译文）**，修改立即保存并对当前页面生效。
 
+### 网站规则：总是翻译 / 从不翻译
+
+在弹出面板的 **此网站** 一栏为当前网站（仅 http/https 页面）选择 **默认 / 总是翻译 / 从不翻译**；
+也可以在 **设置 → 网站规则** 中集中添加或移除域名（粘贴完整网址会自动提取域名）。
+
+| 规则 | 效果 |
+| --- | --- |
+| 默认 | 跟随全局「自动翻译」开关 |
+| 总是翻译 | 即使「自动翻译」关闭，打开该网站时也自动翻译 |
+| 从不翻译 | 即使「自动翻译」开启，该网站也不会自动翻译 |
+
+- **优先级**：手动翻译 > 从不翻译 > 总是翻译 / 自动翻译开关。按钮、快捷键、右键菜单的手动翻译始终可用，「从不翻译」只阻止自动翻译。
+- **子域名继承**：`example.com` 的规则同样作用于 `www.example.com`、`docs.example.com`；多条规则同时命中时以**最具体的域名**为准
+  （例如 `example.com` 从不翻译、`docs.example.com` 总是翻译，则只有 `docs.example.com` 自动翻译）。
+- 自动翻译时若页面没有可翻译的内容（如已是目标语言），会静默结束，不再弹出提示。
+
 ---
 
 ## ⚙️ 设置项
@@ -104,7 +121,7 @@ node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
 | 译文标记样式 | 无 | 可选下划线 / 左侧竖线 / 浅色底纹；**不影响字体字号** |
 | 跳过已是目标语言的文本 | 开 | 按书写系统判定，减少无效请求 |
 | 翻译网页标题 | 开 | 同步翻译标签页标题 |
-| 自动翻译 | 关 | 开启后进入网页自动翻译（通过动态注册内容脚本实现，关闭时零开销） |
+| 自动翻译 | 关 | 开启后进入网页自动翻译，可用「网站规则」按网站例外（通过动态注册内容脚本实现，关闭且没有「总是翻译」规则时零开销） |
 | 最短翻译长度 | 2 | 过滤导航碎词、数字、符号 |
 | 自定义提示词 | 空 | 追加到系统提示词，如"专业术语保留英文" |
 
@@ -183,7 +200,7 @@ node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
 零构建、零依赖：所有源码为可直接加载的普通脚本（content script 为经典脚本，后台用 `importScripts`）。
 
 ```bash
-# 运行 57 项单元 / 集成测试（Node 18+，无需安装任何依赖）
+# 运行 75 项单元 / 集成测试（Node 18+，无需安装任何依赖）
 npm test
 
 # 重新生成图标（纯 Node 手写光栅化 + PNG 编码，无第三方库）
@@ -193,7 +210,8 @@ npm run icons
 测试覆盖：文本规范化、缓存键、占位符保护与还原、语言判定、批量打包、并发池、
 LRU 淘汰、提示词构造与三级解析、HTTP 错误分类、**渲染与插入位置决策**
 （兄弟插入 / 追加内部 / flex 与表格特例 / 排版属性逐条复制），以及**完整引擎链路**
-（去重 / 缓存命中 / 批量 / 429 重试 / 400 拆分 / 401 快停 / 网络失败降级 / 缓存跨实例持久化）。
+（去重 / 缓存命中 / 批量 / 429 重试 / 400 拆分 / 401 快停 / 网络失败降级 / 缓存跨实例持久化），
+以及**网站规则**（域名清洗 / 子域名继承与优先级 / 内容脚本注册参数 / 内容脚本启动判定）。
 
 手工验证页面：
 - `demo/test-page.html` —— 压力用例（标题、链接、列表、表格、代码块、flex 导航、嵌套卡片、`translate="no"`、中英混排、特殊字体段落）；
@@ -209,7 +227,7 @@ src/
   popup/    popup.html popup.css popup.js
   options/  options.html options.css options.js
 icons/      16/32/48/128 PNG（由 tools/make-icons.mjs 生成）
-tests/      wpt.test.mjs engine.test.mjs render.test.mjs
+tests/      wpt.test.mjs engine.test.mjs render.test.mjs content.test.mjs
 demo/       test-page.html showcase.html showcase-dict.json
 docs/       screenshots/ 效果截图
 tools/      make-icons.mjs mock-ai-server.mjs

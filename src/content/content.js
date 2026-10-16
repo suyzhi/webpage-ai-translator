@@ -35,7 +35,9 @@
     dirtyRoots: [],
     dirtyTimer: null,
     originalTitle: null,
-    jobId: 0
+    jobId: 0,
+    starting: false,            // 正在读取设置、尚未进入扫描
+    autoRun: false              // 本次启动由自动翻译触发（找不到内容时不提示）
   };
 
   /* ---------------- 页面内提示 ---------------- */
@@ -123,8 +125,19 @@
   }
 
   /* ---------------- 启动翻译 ---------------- */
-  async function start(overrides) {
-    if (state.status === NS.STATUS.SCANNING || state.status === NS.STATUS.TRANSLATING) return;
+  async function start(overrides, opts) {
+    const auto = !!(opts && opts.auto);
+    // 启动尚未完成又收到启动请求（手动注入时自动翻译与手动翻译会同时触发）：合并为一次，手动优先
+    if (state.starting || state.status === NS.STATUS.SCANNING) {
+      if (!auto) {
+        state.autoRun = false;
+        if (state.starting) state.overrides = overrides || null;
+      }
+      return;
+    }
+    if (state.status === NS.STATUS.TRANSLATING) return;
+    state.starting = true;
+    state.autoRun = auto;
     state.error = null;
     state.overrides = overrides || null;
 
@@ -132,12 +145,14 @@
     try {
       settings = await NS.settings.get();
     } catch (e) {
+      state.starting = false;
       return fail('扩展上下文已失效，请刷新页面后重试');
     }
-    settings = Object.assign({}, settings, overrides || {});
+    state.starting = false;
+    settings = Object.assign({}, settings, state.overrides || {});
     state.settings = settings;
     setStatus(NS.STATUS.SCANNING);
-    ui.show('正在分析页面…', { kind: 'busy', duration: 0, sub: '提取可翻译段落' });
+    if (!state.autoRun) ui.show('正在分析页面…', { kind: 'busy', duration: 0, sub: '提取可翻译段落' });
 
     await new Promise(function (r) { requestAnimationFrame(function () { r(); }); });
 
@@ -155,7 +170,8 @@
     }
 
     if (!units.length) {
-      ui.show('未找到可翻译的内容', { kind: 'err', sub: '页面可能是图片、代码或已是目标语言' });
+      // 自动翻译时静默结束：已是目标语言的网站不应每次打开都弹出错误提示
+      if (!state.autoRun) ui.show('未找到可翻译的内容', { kind: 'err', sub: '页面可能是图片、代码或已是目标语言' });
       setStatus(NS.STATUS.IDLE);
       return;
     }
@@ -526,8 +542,11 @@
     state: state
   };
 
-  /* 自动翻译模式（动态注册内容脚本时） */
+  /*
+   * 自动翻译：动态注册的内容脚本与手动注入都会执行到这里，
+   * 因此按全局开关与网站规则判定（「从不翻译」的网站不自动启动，手动翻译不受影响）。
+   */
   NS.settings.get().then(function (s) {
-    if (s.autoTranslate) start(null);
+    if (U.autoStartFor(s, location.hostname)) start(null, { auto: true });
   }).catch(function () {});
 })();
