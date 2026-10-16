@@ -1,6 +1,7 @@
 /*
  * 集成测试：用假的 chrome API 与假的 fetch 驱动完整后台链路
- * （importScripts 装载 -> 缓存 -> 去重 -> 批量 -> 并发 -> 重试 -> 拆分自愈 -> 致命错误快停）
+ * （importScripts 装载 -> 缓存 -> 去重 -> 批量 -> 并发 -> 重试 -> 拆分自愈 -> 致命错误快停；
+ *   以及自动翻译内容脚本按设置 / 网站规则的动态注册、快捷键 / 右键菜单的注入与消息）
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,7 +60,7 @@ function stubChrome() {
   return { store, listeners };
 }
 
-const { store } = stubChrome();
+const { store, listeners } = stubChrome();
 globalThis.importScripts = function () {};     // 后台用 importScripts，测试里手动按序装载
 
 function load(...files) {
@@ -337,6 +338,104 @@ test('缓存：清空后彻底删除所有条目', async () => {
   assert.equal(c.stats().entries, 0);
   const left = Array.from(store.keys()).filter((k) => k.startsWith('wpt.c'));
   assert.equal(left.length, 0);
+});
+
+/* ---------------- 自动翻译：按设置与网站规则注册内容脚本 ---------------- */
+function recordScripting(rejectIf) {
+  const rec = { registered: [], attempts: 0, unregistered: 0 };
+  chrome.scripting.registerContentScripts = async (scripts) => {
+    rec.attempts++;
+    if (rejectIf && rejectIf(scripts[0])) throw new Error('Invalid match pattern');
+    rec.registered.push(scripts[0]);
+  };
+  chrome.scripting.unregisterContentScripts = async () => { rec.unregistered++; };
+  return rec;
+}
+
+/* 模拟一次设置写入：落盘并触发 storage.onChanged，等待后台异步注册完成 */
+async function changeSettings(prev, next) {
+  const oldValue = WPT.settings.normalize(prev);
+  const newValue = WPT.settings.normalize(next);
+  store.set(WPT.SETTINGS_KEY, newValue);
+  for (const fn of listeners.changed) fn({ [WPT.SETTINGS_KEY]: { oldValue, newValue } }, 'local');
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+test('后台注册：开启自动翻译时排除「从不翻译」的网站', async () => {
+  const rec = recordScripting();
+  await changeSettings({}, { autoTranslate: true, siteRules: { 'example.cn': 'never' } });
+  assert.equal(rec.unregistered, 1, '注册前先注销旧的');
+  assert.equal(rec.registered.length, 1);
+  const s = rec.registered[0];
+  assert.equal(s.id, 'wpt-auto');
+  assert.deepEqual(s.js, WPT.CONTENT_FILES);
+  assert.deepEqual(s.matches, ['http://*/*', 'https://*/*']);
+  assert.deepEqual(s.excludeMatches, ['*://example.cn/*', '*://*.example.cn/*']);
+  store.delete(WPT.SETTINGS_KEY);
+});
+
+test('后台注册：仅修改网站规则也会重新注册；关闭自动翻译时只匹配「总是翻译」', async () => {
+  let rec = recordScripting();
+  await changeSettings({ autoTranslate: false }, { autoTranslate: false, siteRules: { 'news.example.com': 'always' } });
+  assert.equal(rec.registered.length, 1);
+  assert.deepEqual(rec.registered[0].matches, ['*://news.example.com/*', '*://*.news.example.com/*']);
+  assert.equal(rec.registered[0].excludeMatches, undefined);
+
+  // 删除最后一条规则：只注销，不再注册（未翻译时零开销）
+  rec = recordScripting();
+  await changeSettings({ siteRules: { 'news.example.com': 'always' } }, { siteRules: {} });
+  assert.equal(rec.unregistered, 1);
+  assert.equal(rec.attempts, 0);
+
+  // 与注册无关的设置变化不触发重新注册
+  rec = recordScripting();
+  await changeSettings({ concurrency: 4 }, { concurrency: 8 });
+  assert.equal(rec.unregistered, 0);
+  assert.equal(rec.attempts, 0);
+  store.delete(WPT.SETTINGS_KEY);
+});
+
+test('后台注册：带排除规则的注册失败时退回到不排除（由内容脚本自行判定）', async () => {
+  const rec = recordScripting((s) => !!s.excludeMatches);
+  await changeSettings({}, { autoTranslate: true, siteRules: { 'example.cn': 'never' } });
+  assert.equal(rec.attempts, 2);
+  assert.equal(rec.registered.length, 1);
+  assert.deepEqual(rec.registered[0].matches, ['http://*/*', 'https://*/*']);
+  assert.equal(rec.registered[0].excludeMatches, undefined);
+  store.delete(WPT.SETTINGS_KEY);
+});
+
+test('快捷键 / 右键菜单：刚注入时发 START（与注入触发的自动翻译合并），已注入时发 TOGGLE', async () => {
+  const saved = { query: chrome.tabs.query, send: chrome.tabs.sendMessage, exec: chrome.scripting.executeScript };
+  const sent = [];
+  const injections = [];
+  chrome.tabs.query = (q, cb) => cb([{ id: 7 }]);
+  chrome.scripting.executeScript = async (opts) => { injections.push(opts); return []; };
+  chrome.tabs.sendMessage = async (tabId, msg) => {
+    if (msg.type === WPT.MSG.PING) {
+      if (!injections.length) throw new Error('no receiver');
+      return { ok: true };
+    }
+    sent.push([tabId, msg.type]);
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+  try {
+    for (const fn of listeners.command) fn('toggle-translate');
+    await settle();
+    assert.equal(injections.length, 1);
+    assert.equal(injections[0].target.tabId, 7);
+    assert.deepEqual(injections[0].files, WPT.CONTENT_FILES);
+    assert.deepEqual(sent, [[7, WPT.MSG.START]], '刚注入的页面没有可还原的译文，TOGGLE 会停掉已自动启动的翻译');
+
+    for (const fn of listeners.menu) fn({ menuItemId: 'wpt-toggle' }, { id: 7 });
+    await settle();
+    assert.equal(injections.length, 1, '已注入时不重复注入');
+    assert.deepEqual(sent[1], [7, WPT.MSG.TOGGLE]);
+  } finally {
+    chrome.tabs.query = saved.query;
+    chrome.tabs.sendMessage = saved.send;
+    chrome.scripting.executeScript = saved.exec;
+  }
 });
 
 test('engine + cache：不同目标语言使用不同缓存键', async () => {

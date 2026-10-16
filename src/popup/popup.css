@@ -25,5 +25,6 @@ body { width: 340px; padding: 0 0 4px; }
 
 .quick { padding: 12px 14px 4px; border-top: 1px solid var(--line-soft); }
 .quick .field:last-child { margin-bottom: 6px; }
+.site-host { font-weight: 500; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
 
 .foot { display: flex; align-items: center; gap: 8px; padding: 8px 14px 10px; border-top: 1px solid var(--line-soft); }

@@ -37,6 +37,7 @@
     s.customPrompt = String(s.customPrompt || '').slice(0, 2000);
     const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations'];
     for (let i = 0; i < flags.length; i++) s[flags[i]] = !!s[flags[i]];
+    s.siteRules = NS.util.normalizeSiteRules(s.siteRules);
     return s;
   }
 
@@ -56,6 +57,17 @@
     payload[NS.SETTINGS_KEY] = next;
     await chrome.storage.local.set(payload);
     return next;
+  }
+
+  /* 设置单个网站的规则：rule 为 'always' | 'never'，其他值表示删除（恢复默认） */
+  async function setSiteRule(host, rule) {
+    const cur = await get();
+    const h = NS.util.normalizeHost(host);
+    if (!h) return cur;
+    const rules = Object.assign({}, cur.siteRules);
+    if (rule === 'always' || rule === 'never') rules[h] = rule;
+    else delete rules[h];
+    return set({ siteRules: rules });
   }
 
   async function reset() {
@@ -87,5 +99,5 @@
     };
   }
 
-  NS.settings = { get: get, set: set, reset: reset, normalize: normalize, onChange: onChange, forContent: forContent };
+  NS.settings = { get: get, set: set, setSiteRule: setSiteRule, reset: reset, normalize: normalize, onChange: onChange, forContent: forContent };
 })();

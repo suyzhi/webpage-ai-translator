@@ -9,6 +9,7 @@
   let live = null;         // 内容脚本上报的实时状态
   let pollTimer = null;
   let dirty = false;       // 是否有未保存的设置改动
+  let siteHost = '';       // 当前标签页的主机名（仅 http/https 页面）
 
   const STATUS_TEXT = {
     idle: '未翻译',
@@ -150,6 +151,45 @@
     $('noKey').classList.toggle('hidden', !!settings.apiKey);
   }
 
+  /* ---------------- 网站规则 ---------------- */
+  function hostOf(url) {
+    try {
+      const u = new URL(url);
+      return /^https?:$/.test(u.protocol) ? NS.util.normalizeHost(u.hostname) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function renderSite() {
+    $('siteField').classList.toggle('hidden', !siteHost);
+    if (!siteHost) return;
+    const rules = settings.siteRules || {};
+    const own = Object.prototype.hasOwnProperty.call(rules, siteHost) ? rules[siteHost] : 'default';
+    $('siteHost').textContent = siteHost;
+    $('siteHost').title = siteHost;
+    const btns = $('siteSeg').querySelectorAll('button');
+    for (let i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', String(btns[i].dataset.value === own));
+    }
+    const inherited = NS.util.matchSiteRule(siteHost, rules);
+    let hint;
+    if (own === 'always') hint = '打开该网站（含子域名）的页面时自动翻译';
+    else if (own === 'never') hint = '不会自动翻译该网站（含子域名），仍可手动翻译';
+    else if (inherited) hint = '沿用 ' + inherited.host + ' 的规则：' + (inherited.rule === 'always' ? '总是翻译' : '从不翻译');
+    else hint = '跟随全局「自动翻译」开关（当前' + (settings.autoTranslate ? '已开启' : '已关闭') + '）';
+    $('siteHint').textContent = hint;
+  }
+
+  async function setSiteRule(value) {
+    if (!siteHost) return;
+    settings = await NS.settings.setSiteRule(siteHost, value);
+    renderSite();
+    if (value !== 'default' && settings.siteRules[siteHost] !== value) {
+      $('siteHint').textContent = '网站规则已达上限（' + NS.SITE_RULES_MAX + ' 条），请先在设置页清理';
+    }
+  }
+
   async function init() {
     fillLanguages();
     settings = await NS.settings.get();
@@ -162,6 +202,8 @@
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     tab = tabs && tabs[0] ? tabs[0] : null;
+    siteHost = tab ? hostOf(tab.url) : '';
+    renderSite();
     live = await statusOf(tab && tab.id);
     render();
     pollTimer = setInterval(refresh, 600);
@@ -198,6 +240,12 @@
         });
       }
     });
+  });
+
+  $('siteSeg').addEventListener('click', function (e) {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    setSiteRule(btn.dataset.value);
   });
 
   window.addEventListener('unload', function () { if (pollTimer) clearInterval(pollTimer); });

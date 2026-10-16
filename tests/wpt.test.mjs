@@ -268,6 +268,44 @@ test('settings.normalize 保证首批不超过单批上限', () => {
   assert.ok(s.firstBatchChars <= s.batchChars);
 });
 
+test('settings.normalize 清洗网站规则：主机名规范化、丢弃无效项、去重', () => {
+  const s = WPT.settings.normalize({
+    siteRules: {
+      'Example.COM': 'always',
+      'https://news.example.org/path?q=1': 'never',
+      'localhost:8080': 'always',
+      '*.wild.dev': 'never',
+      'bad value.com': 'always',
+      'a*b.com': 'never',
+      'http://': 'never',
+      '[::1]': 'always',
+      'ok.test': 'sometimes',
+      'example.com': 'never'            // 与第一项规范化后重复：后者覆盖前者
+    }
+  });
+  assert.deepEqual(s.siteRules, {
+    'example.com': 'never',
+    'news.example.org': 'never',
+    'localhost': 'always',
+    'wild.dev': 'never'
+  });
+  assert.deepEqual(WPT.settings.normalize({}).siteRules, {});
+  assert.deepEqual(WPT.settings.normalize({ siteRules: null }).siteRules, {});
+  assert.deepEqual(WPT.settings.normalize({ siteRules: ['example.com'] }).siteRules, {});
+  assert.deepEqual(WPT.settings.normalize({ siteRules: 'example.com' }).siteRules, {});
+});
+
+test('settings.normalize 网站规则数量有上限，已有规则不被挤掉', () => {
+  const raw = {};
+  for (let i = 0; i < WPT.SITE_RULES_MAX + 20; i++) raw['site' + i + '.com'] = 'never';
+  raw['site0.com'] = 'always';         // 已有主机的更新不占新名额
+  const rules = WPT.settings.normalize({ siteRules: raw }).siteRules;
+  assert.equal(Object.keys(rules).length, WPT.SITE_RULES_MAX);
+  assert.equal(rules['site0.com'], 'always');
+  assert.equal(rules['site' + (WPT.SITE_RULES_MAX - 1) + '.com'], 'never');
+  assert.equal(rules['site' + WPT.SITE_RULES_MAX + '.com'], undefined);
+});
+
 test('settings.forContent 不泄露密钥', () => {
   const s = WPT.settings.normalize({ apiKey: 'sk-secret' });
   const view = WPT.settings.forContent(s);
@@ -298,4 +336,114 @@ test('预设服务商字段完整', () => {
     assert.ok(p.provider === 'openai' || p.provider === 'anthropic');
   }
   assert.ok(WPT.PRESETS.some((p) => p.baseUrl.includes('deepseek')));
+});
+
+/* ---------------- 网站规则 ---------------- */
+test('normalizeHost 提取主机名，拒绝无法识别的输入', () => {
+  assert.equal(U.normalizeHost('  WWW.Example.COM  '), 'www.example.com');
+  assert.equal(U.normalizeHost('https://user:pw@Docs.Example.com:8443/a/b?c#d'), 'docs.example.com');
+  assert.equal(U.normalizeHost('//cdn.example.com/x.js'), 'cdn.example.com');
+  assert.equal(U.normalizeHost('*.example.com'), 'example.com');
+  assert.equal(U.normalizeHost('*://Example.com/*'), 'example.com', '粘贴匹配模式');
+  assert.equal(U.normalizeHost('https://*.example.com/*'), 'example.com');
+  assert.equal(U.normalizeHost('example.com.'), 'example.com');
+  assert.equal(U.normalizeHost('bücher.de'), 'xn--bcher-kva.de');
+  assert.equal(U.normalizeHost('192.168.1.10'), '192.168.1.10');
+  assert.equal(U.normalizeHost('my_site.example.com'), 'my_site.example.com');
+  for (const bad of ['', null, undefined, '*', '*.', 'a.*.com', 'exa*mple.com', '[::1]', 'http://[::1]:8080/',
+    'has space.com', 'about:blank', 'chrome://extensions', 'ftp://example.com', 'file:///C:/a.html',
+    '-lead.com', 'trail-.com', 'a..b.com', '__proto__', 'x'.repeat(64) + '.com']) {
+    assert.equal(U.normalizeHost(bad), '', '应拒绝：' + bad);
+  }
+});
+
+test('siteRuleFor 子域名继承，最具体的规则优先', () => {
+  const rules = { 'example.com': 'never', 'b.example.com': 'always', 'cn': 'never', '10.0.0.1': 'always' };
+  assert.equal(U.siteRuleFor('example.com', rules), 'never');
+  assert.equal(U.siteRuleFor('www.example.com', rules), 'never');
+  assert.equal(U.siteRuleFor('b.example.com', rules), 'always');
+  assert.equal(U.siteRuleFor('a.b.example.com', rules), 'always');
+  assert.equal(U.siteRuleFor('A.B.Example.COM.', rules), 'always');
+  assert.equal(U.siteRuleFor('notexample.com', rules), null, '不能按字符串后缀误匹配');
+  assert.equal(U.siteRuleFor('news.example.cn', rules), 'never');
+  assert.equal(U.siteRuleFor('10.0.0.1', rules), 'always');
+  assert.equal(U.siteRuleFor('other.org', rules), null);
+  assert.equal(U.siteRuleFor('', rules), null);
+  assert.equal(U.siteRuleFor('constructor', rules), null, '不能命中原型链上的属性');
+  assert.equal(U.siteRuleFor('example.com', null), null);
+  assert.deepEqual(U.matchSiteRule('x.a.b.example.com', rules), { host: 'b.example.com', rule: 'always' });
+});
+
+test('autoStartFor 优先级：从不翻译 > 总是翻译 / 全局自动翻译', () => {
+  const rules = { 'never.com': 'never', 'always.com': 'always' };
+  const on = { autoTranslate: true, siteRules: rules };
+  const off = { autoTranslate: false, siteRules: rules };
+  assert.equal(U.autoStartFor(on, 'www.never.com'), false);
+  assert.equal(U.autoStartFor(on, 'always.com'), true);
+  assert.equal(U.autoStartFor(on, 'other.com'), true);
+  assert.equal(U.autoStartFor(off, 'never.com'), false);
+  assert.equal(U.autoStartFor(off, 'docs.always.com'), true);
+  assert.equal(U.autoStartFor(off, 'other.com'), false);
+  assert.equal(U.autoStartFor(off, ''), false);
+  assert.equal(U.autoStartFor(null, 'other.com'), false);
+});
+
+const ALL_PAGES = ['http://*/*', 'https://*/*'];
+/* Chrome 匹配模式的保守子集：一个无效模式会让 registerContentScripts 整体失败 */
+const VALID_PATTERN = /^(\*:\/\/(\*\.)?[a-z0-9]([a-z0-9_.-]*[a-z0-9])?\/\*|https?:\/\/\*\/\*)$/;
+
+test('autoRegistrationFor：自动翻译开启 -> 全部页面并排除「从不翻译」', () => {
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true }), { matches: ALL_PAGES });
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true, siteRules: { 'example.cn': 'never', 'keep.com': 'always' } }), {
+    matches: ALL_PAGES,
+    excludeMatches: ['*://example.cn/*', '*://*.example.cn/*']
+  });
+  // IP 地址没有子域名
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true, siteRules: { '10.0.0.1': 'never' } }).excludeMatches, ['*://10.0.0.1/*']);
+});
+
+test('autoRegistrationFor：自动翻译关闭 -> 只匹配「总是翻译」，没有则不注册', () => {
+  assert.equal(U.autoRegistrationFor({ autoTranslate: false }), null);
+  assert.equal(U.autoRegistrationFor({ autoTranslate: false, siteRules: { 'example.cn': 'never' } }), null);
+  assert.equal(U.autoRegistrationFor(null), null);
+  assert.deepEqual(U.autoRegistrationFor({ siteRules: { 'news.example.com': 'always', 'other.org': 'never' } }), {
+    matches: ['*://news.example.com/*', '*://*.news.example.com/*']
+  });
+  // 「总是翻译」范围内的「从不翻译」子域名需要排除
+  assert.deepEqual(U.autoRegistrationFor({ siteRules: { 'example.com': 'always', 'ads.example.com': 'never' } }), {
+    matches: ['*://example.com/*', '*://*.example.com/*'],
+    excludeMatches: ['*://ads.example.com/*', '*://*.ads.example.com/*']
+  });
+});
+
+test('autoRegistrationFor：「从不翻译」下有「总是翻译」子域名时只排除自身', () => {
+  const rules = { 'example.com': 'never', 'docs.example.com': 'always' };
+  // 若排除 *.example.com，docs.example.com 也会被排除，违背「最具体的规则优先」
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true, siteRules: rules }), {
+    matches: ALL_PAGES,
+    excludeMatches: ['*://example.com/*']
+  });
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: false, siteRules: rules }), {
+    matches: ['*://docs.example.com/*', '*://*.docs.example.com/*']
+  });
+});
+
+test('autoRegistrationFor：脏数据也不会生成无效的匹配模式', () => {
+  const dirty = {
+    'https://Mixed.Case.com/path': 'always', '*.wild.org': 'never', 'bad host.com': 'always', 'a*b.com': 'never',
+    '[::1]': 'always', 'about:blank': 'never', 'bücher.de': 'always', 'localhost:3000': 'always', '': 'always'
+  };
+  for (const auto of [true, false]) {
+    const reg = U.autoRegistrationFor({ autoTranslate: auto, siteRules: dirty });
+    const all = reg.matches.concat(reg.excludeMatches || []);
+    assert.ok(all.length > 0);
+    for (const p of all) assert.match(p, VALID_PATTERN);
+  }
+  assert.deepEqual(U.autoRegistrationFor({ siteRules: dirty }).matches, [
+    '*://mixed.case.com/*', '*://*.mixed.case.com/*',
+    '*://xn--bcher-kva.de/*', '*://*.xn--bcher-kva.de/*',
+    '*://localhost/*', '*://*.localhost/*'
+  ]);
+  assert.equal(U.autoRegistrationFor({ siteRules: 'garbage' }), null);
+  assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true, siteRules: [1, 2] }), { matches: ALL_PAGES });
 });
