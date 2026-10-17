@@ -346,8 +346,12 @@ test('预设服务商字段完整', () => {
 test('settings：旧版默认批次大小一次性迁移，用户自定义值与已迁移的设置不动', () => {
   const S = WPT.settings;
   const old = S.normalize({ batchChars: 1200, batchItems: 16 });
-  assert.equal(old.batchChars, 2000);
-  assert.equal(old.batchItems, 24);
+  assert.equal(old.batchChars, 5000);
+  assert.equal(old.batchItems, 64);
+  const prev = S.normalize({ batchChars: 2000, batchItems: 24, settingsRev: 3 });
+  assert.equal(prev.batchChars, 5000, '上一版默认值同样升级');
+  assert.equal(prev.batchItems, 64);
+  assert.equal(S.normalize({ batchChars: 2000, batchItems: 24, settingsRev: 4 }).batchChars, 2000, '新版里用户主动设成 2000 应保留');
   assert.equal(old.settingsRev, WPT.SETTINGS_REV);
   const custom = S.normalize({ batchChars: 1500, batchItems: 10 });
   assert.equal(custom.batchChars, 1500);

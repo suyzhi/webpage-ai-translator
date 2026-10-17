@@ -564,7 +564,7 @@ test('升级迁移：旧设置一次性升级批次大小并清空旧缓存，�
   await settle();
   const s = store.get(WPT.SETTINGS_KEY);
   assert.equal(s.settingsRev, WPT.SETTINGS_REV);
-  assert.equal(s.batchChars, 2000);
+  assert.equal(s.batchChars, WPT.DEFAULT_SETTINGS.batchChars);
   assert.equal(s.apiKey, 'sk-keep');
   assert.equal(store.has(WPT.CACHE_PREFIX + 'old'), false, '旧缓存已清空');
   // 自动翻译只注册到名单内的网站
