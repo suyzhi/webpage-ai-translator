@@ -86,6 +86,28 @@ const server = http.createServer((req, res) => {
       const content = segs
         .map((m) => m[1] + '|' + translate(m[2]).replace(/\r?\n/g, '<br>'))
         .join('\n');
+      if (json.stream) {
+        // SSE：每段一个 chunk，间隔 DELAY/段数，最后一个 chunk 带 usage（同 DeepSeek 的 include_usage）
+        stats.streamed = (stats.streamed || 0) + 1;
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const lines = content.split('\n');
+        const p = Math.ceil(user.length / 4) + 50, c = Math.ceil(content.length / 4);
+        const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
+        let i = 0;
+        const tick = () => {
+          if (i < lines.length) {
+            send({ choices: [{ index: 0, delta: { content: (i ? '\n' : '') + lines[i] } }] });
+            i++;
+            setTimeout(tick, Math.max(5, Math.round(DELAY / lines.length)));
+            return;
+          }
+          send({ choices: [], usage: { prompt_tokens: p, completion_tokens: c, total_tokens: p + c, prompt_cache_hit_tokens: 50 } });
+          res.end('data: [DONE]\n\n');
+          stats.inflight--;
+        };
+        tick();
+        return;
+      }
       setTimeout(() => {
         stats.inflight--;
         res.writeHead(200, { 'Content-Type': 'application/json' });

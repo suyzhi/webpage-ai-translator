@@ -241,6 +241,8 @@
 
     for (let attempt = 0; attempt <= maxRetries && pending.length; attempt++) {
       if (this.stopped) return;
+      pending = pending.filter(notDone);              // 流式中途失败时，已落地的段落不再重发
+      if (!pending.length) return;
       try {
         const parsed = await this.callOnce(pending);
         const missing = [];
@@ -271,6 +273,7 @@
       }
     }
 
+    pending = pending.filter(notDone);
     if (this.stopped || !pending.length) return;
 
     // 二分拆分：只对「内容相关」的失败有意义（格式错误 / 缺片段 / 上下文超限 / 超时）；
@@ -288,6 +291,8 @@
   };
 
   /* 每个请求内部从 1 重新编号：任务级流水号在长页面上会涨到 4~5 位，每段都白白多花 token */
+  function notDone(it) { return !it.done; }
+
   Engine.prototype.callOnce = async function (batch) {
     const items = [];
     for (let i = 0; i < batch.length; i++) items.push({ id: i + 1, text: batch[i].sourceProtected });
@@ -295,12 +300,30 @@
     await this.limiter.acquire(this.signal);
     let raw;
     const meta = {};
+    const self = this;
+    // 流式：出现新的一行「N|」说明它之前的段落已经写完，立即落地；最后一段等响应结束再定
+    let cut = 0;
+    const lineStart = /\n\s*\d+\s*\|/g;
+    const onPartial = function (text) {
+      if (self.stopped) return;
+      lineStart.lastIndex = cut ? cut + 1 : 0;
+      let last = -1;
+      let m;
+      while ((m = lineStart.exec(text)) !== null) last = m.index;
+      if (last <= cut) return;
+      cut = last;
+      NS.prompt.parse(text.slice(0, last)).forEach(function (v, id) {
+        const it = batch[id - 1];
+        if (it && v) self.pushResult(it, v);
+      });
+    };
     try {
       this.stats.requests++;
       raw = await NS.providers.call(this.settings, {
         system: this.systemPrompt,
         user: user,
-        maxTokens: NS.providers.estimateMaxTokens(user)
+        maxTokens: NS.providers.estimateMaxTokens(user),
+        onPartial: onPartial
       }, this.signal, meta);
       this.limiter.onSuccess();
     } catch (err) {

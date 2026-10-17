@@ -577,3 +577,72 @@ test('升级迁移：旧设置一次性升级批次大小并清空旧缓存，�
   await settle();
   assert.equal(store.has(WPT.CACHE_PREFIX + 'new'), true, '迁移只执行一次');
 });
+
+/* ---------------- 流式输出 ---------------- */
+function sseFetch(script) {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, body });
+    const steps = script(body, calls.length);
+    const enc = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(ctrl) {
+        for (const s of steps) {
+          if (s.wait) await new Promise((r) => setTimeout(r, s.wait));
+          if (s.fail) { ctrl.error(new TypeError('connection reset')); return; }
+          ctrl.enqueue(enc.encode(s.raw != null ? s.raw : 'data: ' + JSON.stringify(s.chunk) + '\n\n'));
+        }
+        ctrl.close();
+      }
+    });
+    return { ok: true, status: 200, headers: { get: () => null }, body: stream, text: async () => { throw new Error('流式响应不应整体读取'); } };
+  };
+  return calls;
+}
+const delta = (content) => ({ chunk: { choices: [{ delta: { content } }] } });
+
+test('流式：段落在整个响应结束前逐段落地，usage 取自最后一个 SSE 块', async () => {
+  const marks = [];
+  const calls = sseFetch(() => [
+    delta('1|甲\n2|'), { wait: 40, ...delta('乙\n3|') }, { wait: 40, ...delta('丙') },
+    { chunk: { choices: [], usage: { prompt_tokens: 50, completion_tokens: 9, prompt_cache_hit_tokens: 0 } } },
+    { raw: 'data: [DONE]\n\n' }
+  ]);
+  const t0 = Date.now();
+  const { results, stats } = await runEngine(isolated('stream', { streaming: true, useCache: false }),
+    [{ id: 1, text: 'A' }, { id: 2, text: 'B' }, { id: 3, text: 'C' }],
+    { onResults: (entries) => entries.forEach((e) => marks.push([e[0], e[1], Date.now() - t0])) });
+  assert.equal(calls[0].body.stream, true);
+  assert.deepEqual(calls[0].body.stream_options, { include_usage: true });
+  assert.deepEqual(marks.map((m) => m[1]), ['甲', '乙', '丙']);
+  assert.ok(marks[0][2] < marks[2][2] - 50, '第 1 段早于最后一段约 80ms 落地：' + marks.map((m) => m[2]));
+  assert.equal(stats.usage.input, 50);
+  assert.equal(stats.usage.output, 9);
+  assert.equal(results.length, 0, '自定义 onResults 覆盖默认收集');
+});
+
+test('流式：段内真换行（续行）不会被提前截断；中途断流只重发未落地的段落', async () => {
+  const marks = [];
+  const calls = sseFetch((body, n) => n === 1
+    ? [delta('1|第一行\n第二行\n2|乙'), { wait: 20, fail: true }]
+    : [delta(body.messages[1].content.split('\n').map((l) => l.replace(/^(\d+)\|.*$/, '$1|重发')).join('\n'))]);
+  await runEngine(isolated('stream-retry', { streaming: true, useCache: false, maxRetries: 1 }),
+    [{ id: 1, text: 'A' }, { id: 2, text: 'B' }],
+    { onResults: (entries) => entries.forEach((e) => marks.push(e)) });
+  assert.deepEqual(marks.find((m) => m[0] === 1)[1], '第一行\n第二行');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.messages[1].content, '1|B', '只重发第 2 段，且重新编号');
+  assert.equal(marks.find((m) => m[0] === 2)[1], '重发');
+});
+
+test('流式：未在白名单的平台不开启；服务端忽略 stream 时按普通 JSON 解析', async () => {
+  const plain = makeFetch(() => ({ content: '1|x' }));
+  await WPT.providers.call(isolated('plain'), { system: 's', user: '1|a', onPartial: () => {} });
+  assert.equal(plain[0].body.stream, false, '未知平台不发 stream');
+  const ignored = makeFetch(() => ({ content: '1|y' }));
+  const out = await WPT.providers.call(Object.assign({}, BASE_SETTINGS, { baseUrl: 'https://api.deepseek.com/v1' }),
+    { system: 's', user: '1|a', onPartial: () => {} });
+  assert.equal(ignored[0].body.stream, true, 'DeepSeek 开启流式');
+  assert.equal(out, '1|y', '返回的是普通 JSON 时照常解析');
+});

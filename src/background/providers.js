@@ -31,7 +31,7 @@
    * 超时覆盖「连接 + 响应头 + 读取响应体」全过程：
    * 高并发下网关常常先回响应头再卡住响应体，只对 fetch() 计时会让该请求永久占用一个并发名额。
    */
-  async function doFetch(url, init, settings, outerSignal) {
+  async function doFetch(url, init, settings, outerSignal, onChunk) {
     const ctrl = new AbortController();
     let timedOut = false;
     const onOuterAbort = function () { try { ctrl.abort(U.abortError()); } catch (e) {} };
@@ -50,7 +50,7 @@
     try {
       const res = await Promise.race([fetch(url, Object.assign({}, init, { signal: ctrl.signal, cache: 'no-store' })), aborted]);
       stage = 'body';
-      const text = await Promise.race([res.text(), aborted]);
+      const text = await Promise.race([onChunk && res.ok && res.body ? readStream(res.body, onChunk) : res.text(), aborted]);
       return { ok: res.ok, status: res.status, headers: res.headers, text: text };
     } catch (e) {
       if (outerSignal && outerSignal.aborted) throw U.abortError();
@@ -72,6 +72,21 @@
       clearTimeout(timer);
       if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
     }
+  }
+
+  /* 逐块读取响应体：每块解码后交给 onChunk，同时拼出完整文本（错误分类、非流式回退都要用） */
+  async function readStream(body, onChunk) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let all = '';
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      const piece = decoder.decode(r.value, { stream: true });
+      all += piece;
+      try { onChunk(piece); } catch (e) { /* 回调异常不影响读取 */ }
+    }
+    return all + decoder.decode();
   }
 
   function readBody(res) {
@@ -137,6 +152,60 @@
     return { input: (u.input_tokens || 0) + read + (u.cache_creation_input_tokens || 0), output: u.output_tokens || 0, cached: read };
   }
 
+  /*
+   * 流式输出：译文逐段落地，读者不必等整批（真实 6 站：段等待 P50 4.4 s → 见 docs/metrics.md）。
+   * 只对确认支持 stream + stream_options 的平台开启，避免严格校验参数的服务端返回 400；
+   * settings.streaming 可强制开关（测试用）。
+   */
+  function canStream(settings) {
+    if (settings.streaming != null) return !!settings.streaming;
+    let host = '';
+    try { host = new URL(settings.baseUrl).hostname; } catch (e) { return false; }
+    return /(^|\.)(deepseek\.com|openai\.com|openrouter\.ai)$/i.test(host);
+  }
+
+  /* SSE：累计 delta.content / reasoning_content，结束后拼成与非流式相同的响应结构 */
+  function sseReader(onPartial) {
+    let buf = '';
+    let content = '';
+    let reasoning = '';
+    let usage = null;
+    let error = null;
+    let events = 0;
+    function line(raw) {
+      const s = raw.trim();
+      if (s.indexOf('data:') !== 0) return;
+      const payload = s.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      let j;
+      try { j = JSON.parse(payload); } catch (e) { return; }
+      events++;
+      if (j.error) error = j.error;
+      if (j.usage) usage = j.usage;
+      const c = j.choices && j.choices[0];
+      const d = c && (c.delta || c.message);
+      if (!d) return;
+      if (typeof d.reasoning_content === 'string') reasoning += d.reasoning_content;
+      if (typeof d.content === 'string' && d.content) {
+        content += d.content;
+        try { onPartial(content); } catch (e) { /* 忽略 */ }
+      }
+    }
+    return {
+      push: function (piece) {
+        buf += piece;
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) { line(buf.slice(0, i)); buf = buf.slice(i + 1); }
+      },
+      finish: function () {
+        if (buf) { line(buf); buf = ''; }
+        if (!events) return null;
+        if (error && !content) return { error: error };
+        return { choices: [{ message: { content: content, reasoning_content: reasoning } }], usage: usage };
+      }
+    };
+  }
+
   /* ---------------- OpenAI 兼容 (/chat/completions) ---------------- */
   async function callOpenAI(settings, messages, signal, meta) {
     const url = U.joinUrl(settings.baseUrl, '/chat/completions');
@@ -153,12 +222,19 @@
       stream: false
     };
     applyTokenControls(body, settings, messages);
+    const sse = typeof messages.onPartial === 'function' && canStream(settings) ? sseReader(messages.onPartial) : null;
+    if (sse) {
+      body.stream = true;
+      body.stream_options = { include_usage: true };
+    }
 
-    const res = await doFetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, settings, signal);
+    const res = await doFetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, settings, signal, sse ? sse.push : null);
     const parsed = readBody(res);
     if (!res.ok) throw makeError(res.status, extractError(parsed.json, parsed.text), res.headers);
-    const data = parsed.json;
+    // 服务端忽略 stream 参数时仍是普通 JSON，照常解析
+    const data = parsed.json || (sse ? sse.finish() : null);
     if (!data) throw makeError(502, '返回内容不是合法 JSON：' + U.truncate(parsed.text, 200), res.headers);
+    if (data.error && !data.choices) throw makeError(502, extractError(data, ''), res.headers);
     if (meta) meta.usage = openaiUsage(data.usage);
     const choice = data.choices && data.choices[0];
     const msg = choice && (choice.message || choice.delta || choice);

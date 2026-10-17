@@ -43,6 +43,12 @@ function estTokens(s) {
   return t + ascii / 3.6;
 }
 
+function pct(xs, q) {
+  if (!xs.length) return null;
+  const a = xs.slice().sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.floor(q * a.length))];
+}
+
 const nullCache = {
   key: (sys, t) => U.hashText(sys + '\u0000' + t),
   getMany: async () => new Map(),
@@ -56,7 +62,7 @@ async function runSite(id, texts) {
     apiKey: process.env.DEEPSEEK_API_KEY || '', targetLang: 'zh-CN', useCache: false
   }, OVERRIDES));
   const list = (REAL ? texts.slice(0, MAX_REAL_SEGMENTS) : texts).map((t, i) => ({ id: i + 1, text: t }));
-  const rec = { requests: 0, sysTok: 0, userTok: 0, items: [], firstAt: null };
+  const rec = { requests: 0, sysTok: 0, userTok: 0, items: [], firstAt: null, doneAt: [] };
   const realCall = NS.providers.call;
   if (!REAL) {
     NS.providers.call = async (s, msg, signal, meta) => {
@@ -79,7 +85,11 @@ async function runSite(id, texts) {
   const t0 = Date.now();
   const engine = new NS.Engine({
     settings, cache: nullCache, limiter: new U.Limiter(settings.concurrency),
-    onResults: () => { if (rec.firstAt == null) rec.firstAt = Date.now() - t0; }
+    onResults: (pairs) => {
+      const t = Date.now() - t0;
+      if (rec.firstAt == null) rec.firstAt = t;
+      for (let i = 0; i < pairs.length; i++) rec.doneAt.push(t);     // 每段拿到译文的时刻：衡量「读者等多久」
+    }
   });
   await engine.run(list);
   NS.providers.call = realCall;
@@ -98,7 +108,8 @@ async function runSite(id, texts) {
     amplification: r1(inputTok / Math.max(1, uniqTok)),      // 输入 token ÷ 去重后原文 token
     sysShare: REAL ? null : r1(rec.sysTok / Math.max(1, inputTok)),
     failed: engine.stats.failed,
-    firstMs: rec.firstAt, wallMs
+    firstMs: rec.firstAt, wallMs,
+    segP50: pct(rec.doneAt, 0.5), segP90: pct(rec.doneAt, 0.9)
   };
 }
 
@@ -113,12 +124,12 @@ async function main() {
     if (!texts || texts.length < 5) continue;
     rows.push(await runSite(f.replace(/\.json$/, ''), texts));
   }
-  console.log('站点            段数  去重   请求  段/请求  原文tok  输入tok  放大  系统提示占比' + (REAL ? '  缓存tok  首条ms  总ms  失败' : ''));
+  console.log('站点            段数  去重   请求  段/请求  原文tok  输入tok  放大  系统提示占比' + (REAL ? '  缓存tok  首条ms  总ms  失败  段P50  段P90' : ''));
   for (const r of rows) {
     console.log(r.id.padEnd(15) + String(r.segments).padStart(5) + String(r.unique).padStart(6) + String(r.requests).padStart(6) +
       String(r.avgItems).padStart(8) + String(r.rawTok).padStart(9) + String(r.inputTok).padStart(9) + String(r.amplification).padStart(6) +
       (REAL ? '' : String(r.sysShare).padStart(10)) +
-      (REAL ? String(r.cachedTok).padStart(9) + String(r.firstMs).padStart(8) + String(r.wallMs).padStart(7) + String(r.failed).padStart(5) : ''));
+      (REAL ? String(r.cachedTok).padStart(9) + String(r.firstMs).padStart(8) + String(r.wallMs).padStart(7) + String(r.failed).padStart(5) + String(r.segP50).padStart(7) + String(r.segP90).padStart(7) : ''));
   }
   const med = (k) => { const a = rows.map((r) => r[k]).filter((x) => x != null).sort((x, y) => x - y); return a.length ? a[a.length >> 1] : null; };
   const tot = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
@@ -126,7 +137,8 @@ async function main() {
     mode: REAL ? 'real' : 'offline', model: MODEL, overrides: OVERRIDES, sites: rows.length,
     medianAmplification: med('amplification'),
     pooledAmplification: Math.round(100 * tot('inputTok') / Math.max(1, tot('uniqTok'))) / 100,
-    medianSysShare: med('sysShare'), medianAvgItems: med('avgItems'), totalRequests: tot('requests')
+    medianSysShare: med('sysShare'), medianAvgItems: med('avgItems'), totalRequests: tot('requests'),
+    medianSegP50: med('segP50'), medianSegP90: med('segP90'), totalOutput: tot('outputTok'), totalInput: tot('inputTok'), totalFailed: tot('failed')
   };
   console.log('\n汇总：' + JSON.stringify(summary));
   const outDir = path.join(ROOT, '.cache', 'eval');

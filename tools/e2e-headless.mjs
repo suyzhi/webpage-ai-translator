@@ -57,7 +57,8 @@ async function main() {
 
     const settings = {
       provider: 'openai', baseUrl: MOCK + '/v1', apiKey: '', model: 'mock',
-      targetLang: 'zh-CN', displayMode: 'bilingual', concurrency: 4
+      targetLang: 'zh-CN', displayMode: 'bilingual', concurrency: 4,
+      streaming: true          // 本地地址不在流式白名单内：强制开启，走通 service worker 里的 SSE 读取；其余 e2e 覆盖非流式
     };
     await cdp.evalIn(optSession, '(async () => { await chrome.storage.local.set({ "wpt.settings.v1": ' + JSON.stringify(settings) + ' }); return true; })()');
 
@@ -87,6 +88,7 @@ async function main() {
 
     const stats = await httpJson(MOCK + '/__stats');
     check('确实发起了 API 请求', stats.requests > 0, 'requests=' + stats.requests);
+    check('请求走流式（SSE）', stats.streamed === stats.requests, 'streamed=' + stats.streamed + ' / ' + stats.requests);
     check('批量打包生效（存在多段批次）', stats.batches.some((n) => n > 1), JSON.stringify(stats.batches));
     check('请求段数不超过单元数（相同文本去重生效）', stats.segments <= state.total, 'segments=' + stats.segments + ' total=' + state.total);
     check('请求段数覆盖全部译文节点', stats.segments >= dom.count, 'segments=' + stats.segments + ' rendered=' + dom.count);
