@@ -51,6 +51,7 @@
     rafId: 0,
     timerId: 0,
     observer: null,
+    shadowRoots: new Set(),     // 抽取时途经的影子根：document 上的观察者看不到其内部变化，需逐个观察
     io: null,
     nearIO: null,
     armTimer: 0,
@@ -227,6 +228,7 @@
     } catch (e) {
       return fail('页面解析失败：' + ((e && e.message) || e));
     }
+    observeShadows(units.shadowRoots);
     // 续翻（停止后再次开始 / 重试失败段落）：已登记的元素不重复翻译
     units = units.filter(function (u) { return !(u.el && state.knownEls.has(u.el)); });
     units = await filterLanguage(units, settings);
@@ -823,12 +825,28 @@
   }
 
   /* ---------------- 动态内容（SPA / 滚动加载 / 原文改写） ---------------- */
+  const OBSERVE_OPTS = { childList: true, subtree: true, characterData: true };
+
   function startObserving() {
     if (state.observer || !document.documentElement) return;
     state.observer = new MutationObserver(onMutations);
     try {
-      state.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+      state.observer.observe(document.documentElement, OBSERVE_OPTS);
     } catch (e) {}
+    state.shadowRoots.forEach(function (r) {
+      if (!r.host || !r.host.isConnected) { state.shadowRoots.delete(r); return; }
+      try { state.observer.observe(r, OBSERVE_OPTS); } catch (e) {}
+    });
+  }
+
+  function observeShadows(roots) {
+    if (!roots) return;
+    for (let i = 0; i < roots.length; i++) {
+      const r = roots[i];
+      if (state.shadowRoots.has(r)) continue;
+      state.shadowRoots.add(r);
+      if (state.observer) { try { state.observer.observe(r, OBSERVE_OPTS); } catch (e) {} }
+    }
   }
 
   function stopObserving() {
@@ -968,6 +986,7 @@
       seen.add(node);
       let units;
       try { units = NS.Extractor.collect(node, cfg); } catch (e) { continue; }
+      observeShadows(units.shadowRoots);
       let invalidated = false;
       const mark = found.length;
       for (let j = 0; j < units.length; j++) {

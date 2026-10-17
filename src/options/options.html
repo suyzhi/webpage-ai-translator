@@ -47,28 +47,6 @@
         <div class="chips" id="presets"></div>
       </div>
 
-      <div class="grid2">
-        <div class="field">
-          <label class="label" for="provider"><span>接口协议</span></label>
-          <select id="provider">
-            <option value="openai">OpenAI 兼容 (/chat/completions)</option>
-            <option value="anthropic">Anthropic (/messages)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label class="label" for="model"><span>模型</span></label>
-          <input type="text" id="model" list="modelList" placeholder="gpt-4o-mini" spellcheck="false">
-          <datalist id="modelList"></datalist>
-          <div class="hint warn-text hidden" id="modelWarn">这看起来是推理（思考）模型：翻译用不上推理，思考消耗的 token 常是译文的数倍。建议改用非推理模型，如 <code>deepseek-flash</code>。</div>
-        </div>
-      </div>
-
-      <div class="field">
-        <label class="label" for="baseUrl"><span>接口地址 Base URL</span></label>
-        <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false">
-        <div class="hint">填到 <code>/v1</code> 即可，程序会自动补 <code>/chat/completions</code>；也可直接填写完整地址。</div>
-      </div>
-
       <div class="field">
         <div class="label">
           <label for="apiKey">API 密钥</label>
@@ -80,10 +58,35 @@
         </div>
       </div>
 
+      <div class="field">
+        <label class="label" for="model"><span>模型</span></label>
+        <input type="text" id="model" list="modelList" placeholder="deepseek-flash" spellcheck="false">
+        <datalist id="modelList"></datalist>
+        <div class="hint warn-text hidden" id="modelWarn">这看起来是推理（思考）模型：翻译用不上推理，思考消耗的 token 常是译文的数倍。建议改用非推理模型，如 <code>deepseek-flash</code>。</div>
+      </div>
+
       <div class="row test-row">
         <button class="btn" id="testBtn" type="button">测试连接</button>
         <div class="grow test-result" id="testResult"></div>
       </div>
+
+      <details class="more" id="svcMore">
+        <summary>自定义接口<small>使用上方服务商时无需修改</small></summary>
+        <div class="more-body">
+          <div class="field">
+            <label class="label" for="provider"><span>接口协议</span></label>
+            <select id="provider">
+              <option value="openai">OpenAI 兼容 (/chat/completions)</option>
+              <option value="anthropic">Anthropic (/messages)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="baseUrl"><span>接口地址 Base URL</span></label>
+            <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false">
+            <div class="hint">填到 <code>/v1</code> 即可，程序会自动补 <code>/chat/completions</code>；也可直接填写完整地址。</div>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- 翻译设置 -->
@@ -93,17 +96,9 @@
         <div><h2>翻译设置</h2><p class="muted">目标语言、显示方式与译文样式。</p></div>
       </div>
 
-      <div class="grid2">
-        <div class="field">
-          <label class="label" for="targetLang"><span>目标语言</span></label>
-          <select id="targetLang"></select>
-        </div>
-        <div class="field">
-          <label class="label" for="sourceLang"><span>原文语言</span></label>
-          <select id="sourceLang">
-            <option value="auto">自动识别</option>
-          </select>
-        </div>
+      <div class="field">
+        <label class="label" for="targetLang"><span>目标语言</span></label>
+        <select id="targetLang"></select>
       </div>
 
       <div class="field">
@@ -140,22 +135,10 @@
       </div>
 
       <div class="switch">
-        <div class="text">跳过已经是目标语言的文本<small>减少无效请求，节省 token</small></div>
-        <label class="toggle"><input type="checkbox" id="skipTargetLang"><span class="track"></span></label>
-      </div>
-      <div class="switch">
-        <div class="text">翻译网页标题<small>同步翻译标签页标题</small></div>
-        <label class="toggle"><input type="checkbox" id="translateTitle"><span class="track"></span></label>
-      </div>
-      <div class="switch">
-        <div class="text">按需翻译<small>只翻译当前屏幕附近的内容，滚动到哪翻到哪；长页面可省下大部分 token</small></div>
-        <label class="toggle"><input type="checkbox" id="lazyTranslate"><span class="track"></span></label>
-      </div>
-      <div class="switch">
         <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭）；也可在弹出面板里对当前网站单独开关</small></div>
         <label class="toggle"><input type="checkbox" id="autoTranslate"><span class="track"></span></label>
       </div>
-      <div class="grid2 site-lists">
+      <div class="grid2 site-lists" id="siteLists">
         <div class="field">
           <label class="label" for="autoSites"><span>仅对这些网站自动翻译</span></label>
           <textarea id="autoSites" rows="3" spellcheck="false" placeholder="每行一个，如&#10;nytimes.com&#10;reddit.com"></textarea>
@@ -166,6 +149,28 @@
           <textarea id="neverSites" rows="3" spellcheck="false" placeholder="每行一个，如&#10;bilibili.com"></textarea>
           <div class="hint">优先级最高；手动翻译不受影响。</div>
         </div>
+      </div>
+
+      <details class="more" id="translateMore">
+        <summary>更多选项<small>原文语言、按需翻译、动画、提示词等</small></summary>
+        <div class="more-body">
+      <div class="field">
+        <label class="label" for="sourceLang"><span>原文语言</span></label>
+        <select id="sourceLang">
+          <option value="auto">自动识别</option>
+        </select>
+      </div>
+      <div class="switch">
+        <div class="text">按需翻译<small>只翻译当前屏幕附近的内容，滚动到哪翻到哪；长页面可省下大部分 token</small></div>
+        <label class="toggle"><input type="checkbox" id="lazyTranslate"><span class="track"></span></label>
+      </div>
+      <div class="switch">
+        <div class="text">跳过已经是目标语言的文本<small>减少无效请求，节省 token</small></div>
+        <label class="toggle"><input type="checkbox" id="skipTargetLang"><span class="track"></span></label>
+      </div>
+      <div class="switch">
+        <div class="text">翻译网页标题<small>同步翻译标签页标题</small></div>
+        <label class="toggle"><input type="checkbox" id="translateTitle"><span class="track"></span></label>
       </div>
       <div class="switch">
         <div class="text">插入动画<small>译文按阅读顺序依次浮现，待翻译段落显示加载指示（跟随系统「减少动态效果」）</small></div>
@@ -189,6 +194,8 @@
         <label class="label" for="customPrompt"><span>自定义提示词（可选）</span></label>
         <textarea id="customPrompt" placeholder="例如：专业术语保留英文原文；语气保持口语化。"></textarea>
       </div>
+        </div>
+      </details>
     </section>
 
     <!-- 性能 -->
@@ -196,9 +203,23 @@
       <div class="card-head">
         <span class="badge"><svg class="i"><use href="#i-gauge"/></svg></span>
         <div><h2>性能与可靠性</h2>
-        <p class="muted">译文按段落打包批量请求，相同文本自动去重并命中缓存。</p></div>
+        <p class="muted">译文按段落打包批量请求，相同文本自动去重并命中缓存。默认参数已按实测调好，一般无需修改。</p></div>
       </div>
 
+      <div class="row cache-row">
+        <button class="btn" id="refreshStats" type="button">刷新统计</button>
+        <button class="btn btn-danger" id="clearCache" type="button">清空缓存</button>
+        <div class="grow muted" id="cacheStats">—</div>
+      </div>
+
+      <div class="row cache-row">
+        <button class="btn" id="resetUsage" type="button">用量清零</button>
+        <div class="grow muted" id="usageStats">—</div>
+      </div>
+
+      <details class="more" id="perfMore">
+        <summary>高级参数<small>并发、批次、重试、超时与缓存</small></summary>
+        <div class="more-body">
       <div class="field">
         <div class="label"><label for="concurrency">并发数量</label><span class="mono value" id="concurrencyVal">4</span></div>
         <input type="range" id="concurrency" min="1" max="32" step="1">
@@ -247,17 +268,8 @@
         <div class="text">启用翻译缓存<small>重复内容直接复用，跨标签页共享</small></div>
         <label class="toggle"><input type="checkbox" id="useCache"><span class="track"></span></label>
       </div>
-
-      <div class="row cache-row">
-        <button class="btn" id="refreshStats" type="button">刷新统计</button>
-        <button class="btn btn-danger" id="clearCache" type="button">清空缓存</button>
-        <div class="grow muted" id="cacheStats">—</div>
-      </div>
-
-      <div class="row cache-row">
-        <button class="btn" id="resetUsage" type="button">用量清零</button>
-        <div class="grow muted" id="usageStats">—</div>
-      </div>
+        </div>
+      </details>
     </section>
 
     <footer class="page-foot">

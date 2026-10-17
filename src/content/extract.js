@@ -128,9 +128,27 @@
     if (last && !/\s$/.test(last)) out.push(' ');
   }
 
-  function collectText(node, out, depth) {
+  /*
+   * 按「显示出来的样子」取子节点：行内宿主读影子树；<slot> 在 slots=true 时读投影进来的节点。
+   * slots=false 的场景（块级宿主的影子树里）投影内容由宿主的普通子节点那一路单独抽取，这里跳过以免重复。
+   */
+  function childList(node, slots, lightOnly) {
+    if (!lightOnly && node.nodeType === 1) {
+      const sr = shadowOf(node);
+      if (sr) return sr.childNodes;
+      if (node.tagName === 'SLOT') {
+        const assigned = node.assignedNodes({ flatten: true });
+        if (assigned.length) return slots ? assigned : [];
+      }
+    }
+    return node.childNodes;
+  }
+
+  function collectText(node, out, depth, slots, lightOnly) {
     let prev = null;
-    for (let n = node.firstChild; n; n = n.nextSibling) {
+    const kids = childList(node, slots, lightOnly);
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
       if (n.nodeType === 3) {
         if (n.nodeValue) { out.push(n.nodeValue); prev = n; }
         continue;
@@ -140,14 +158,15 @@
       if (isHardSkip(n)) continue;
       if (depth < 40 && !isVisible(n)) continue;
       pushGap(out, prev, n);
-      collectText(n, out, depth + 1);
+      collectText(n, out, depth + 1, slots || !!shadowOf(n), false);
       prev = n;
     }
     return out;
   }
 
+  /* 单元元素自身若是宿主，其影子树由 walkShadow 单独抽取，这里只读普通子节点 */
   function inlineTextOf(node) {
-    return collectText(node, [], 0).join('');
+    return collectText(node, [], 0, false, true).join('');
   }
 
   function inlineTextOfNodes(nodes) {
@@ -157,7 +176,7 @@
       const n = nodes[i];
       if (n.nodeType === 3) { if (n.nodeValue) out.push(n.nodeValue); }
       else if (n.tagName === 'BR') out.push('\n');
-      else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0); }
+      else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
       prev = n;
     }
     return out.join('');
@@ -246,12 +265,52 @@
     });
   }
 
+  /*
+   * 影子树（Web Components：MSN、Salesforce、Reddit 的 shreddit-*）：open 直接可读；
+   * closed 只能用扩展专用的 chrome.dom API，且只有自定义元素（标签名带连字符）才值得查，避免逐元素调用。
+   */
+  const DOM_API = globalThis.chrome && chrome.dom && typeof chrome.dom.openOrClosedShadowRoot === 'function'
+    ? chrome.dom.openOrClosedShadowRoot : null;
+  function shadowOf(el) {
+    if (el.shadowRoot) return el.shadowRoot;
+    if (DOM_API && el.tagName.indexOf('-') > 0) { try { return DOM_API(el) || null; } catch (e) { /* 忽略 */ } }
+    return null;
+  }
+
+  /*
+   * 自定义元素默认 display:inline，组件作者常常不写 :host{display:block}；
+   * 影子树第一层里有块级内容（卡片、列表）的宿主按容器处理，否则会被当成一段行内文字整块拼接。
+   */
+  function hostOfBlocks(el) {
+    const sr = shadowOf(el);
+    if (!sr) return false;
+    let i = 0;
+    for (let c = sr.firstElementChild; c && i < 30; c = c.nextElementSibling, i++) {
+      if (HARD_SKIP_TAGS.has(c.tagName)) continue;
+      let cs = null;
+      try { cs = getComputedStyle(c); } catch (e) { continue; }
+      if (isBlockish(c, cs)) return true;
+    }
+    return false;
+  }
+
+  /* 影子根本身不是元素（没有样式、不能作为插入锚点），逐个子元素当作独立块遍历；直接挂在根下的裸文本极少，忽略 */
+  function walkShadow(root, ctx, depth) {
+    ctx.shadowRoots.push(root);
+    for (let n = root.firstElementChild; n; n = n.nextElementSibling) {
+      if (isHardSkip(n) || !isVisible(n)) continue;
+      walk(n, ctx, depth + 1, getComputedStyle(n));
+    }
+  }
+
   function walk(el, ctx, depth, selfStyle) {
     if (depth > MAX_DEPTH || ctx.units.length >= MAX_UNITS) return;
     if (isHardSkip(el)) return;
     // 行内代码用元素一旦被 CSS 变成块级容器（例如 div > code{display:block}），
     // 整块都是代码，必须跳过；而行内的 <code> 仍会作为句子的一部分参与翻译。
     if (INLINE_SOFT_SKIP.has(el.tagName)) return;
+    const sr = shadowOf(el);
+    if (sr) walkShadow(sr, ctx, depth);      // 宿主的普通子节点（经 slot 投影显示）照常在下面处理
 
     const inlineNodes = [];
     const blockKids = [];
@@ -262,7 +321,7 @@
       if (isHardSkip(n)) continue;
       if (!isVisible(n)) continue;
       const cs = getComputedStyle(n);
-      if (isBlockish(n, cs)) { blockKids.push(n); blockStyles.push(cs); }
+      if (isBlockish(n, cs) || hostOfBlocks(n)) { blockKids.push(n); blockStyles.push(cs); }
       else inlineNodes.push(n);
     }
 
@@ -294,12 +353,14 @@
   }
 
   function collect(root, settings) {
-    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0 };
+    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [] };
     const start = root || document.body;
     if (!start) return [];
     let rootStyle = null;
     try { rootStyle = getComputedStyle(start); } catch (e) {}
     walk(start, ctx, 0, rootStyle);
+    // 途经的影子根：MutationObserver 看不到影子树内部的变化，内容脚本需要逐个追加观察
+    ctx.units.shadowRoots = ctx.shadowRoots;
     return ctx.units;
   }
 

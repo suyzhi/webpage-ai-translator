@@ -47,9 +47,9 @@
   NS.DEFAULT_SETTINGS = {
     // ---- AI 服务 ----
     provider: 'openai',            // openai | anthropic
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: 'https://api.deepseek.com/v1',   // 新装默认 DeepSeek：填入密钥即可翻译（已保存的设置是完整对象，不受影响）
     apiKey: '',
-    model: 'gpt-4o-mini',
+    model: 'deepseek-flash',
     temperature: 0.2,
     // ---- 翻译 ----
     targetLang: 'zh-CN',

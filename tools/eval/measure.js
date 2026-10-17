@@ -143,7 +143,10 @@
     const capHit = units.length >= 5000;
     function covered(t) {
       if (nodeSet.has(t)) return true;
-      for (let a = t.parentNode; a && a.nodeType === 1; a = a.parentNode) {
+      // 沿组合树向上：行内宿主的影子文本并入了外层句子的单元
+      for (let a = t.parentNode; a; a = a.parentNode) {
+        if (a.nodeType === 11 && a.host) a = a.host;
+        if (a.nodeType !== 1) break;
         if (fullSet.has(a) || nodeSet.has(a)) return true;
       }
       return false;
@@ -186,7 +189,7 @@
       if (!b) { b = { w: 0, cw: 0, text: '', reasons: new Map() }; blocks.set(blk, b); }
       b.w += w;
       if (b.text.length < 160) b.text += s.replace(/\s+/g, ' ');
-      if (o.frameCovered !== false && !inShadow && covered(node)) b.cw += w;
+      if (o.frameCovered !== false && covered(node)) b.cw += w;
       else {
         diagDetail = '';
         const why = diagnose(node, inShadow, o.frameCovered !== false, units, capHit);

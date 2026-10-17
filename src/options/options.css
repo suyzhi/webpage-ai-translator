@@ -127,3 +127,21 @@ code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-soft); 
 .warn-text { color: var(--warn); background: var(--warn-soft); padding: 6px 8px; border-radius: 8px; }
 .site-lists { margin-top: 4px; }
 .hidden { display: none !important; }
+
+/* ---------- 折叠的高级选项：默认只露出常用设置 ---------- */
+details.more { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 12px; }
+details.more > summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: baseline; gap: 8px;
+  font-size: 13px; font-weight: 650; color: var(--fg-soft); padding: 2px 0; user-select: none;
+}
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before {
+  content: ''; flex: 0 0 auto; width: 6px; height: 6px; margin-right: 2px; align-self: center;
+  border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg); transition: transform .15s ease;
+}
+details.more[open] > summary::before { transform: rotate(45deg); }
+details.more > summary small { font-size: 11.5px; font-weight: 400; color: var(--fg-faint); }
+details.more > summary:hover { color: var(--fg); }
+details.more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+details.more > .more-body { margin-top: 12px; }

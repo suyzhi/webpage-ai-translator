@@ -143,6 +143,36 @@ async function main() {
     check('display:contents 节点视为已渲染（增量扫描）', edge.contentsRendered);
     check('小写 mathjax 标记类的块被抽取（arXiv 摘要）', edge.hasMathjaxMarker);
     check('MathJax_Display 公式块被跳过', !edge.hasMathDisplay);
+
+    // 4) Shadow DOM：open 影子根、嵌套影子根、具名 slot 投影的宿主子元素
+    const shadow = await cdp.evalIn(session, HEAD +
+      'document.body.textContent = "";' +
+      'const a = document.createElement("x-card"); document.body.appendChild(a);' +
+      'a.attachShadow({ mode: "open" }).innerHTML = "<div><h2>Heading inside an open shadow root</h2><p>Paragraph inside the shadow tree.</p><x-inner></x-inner><slot name=desc></slot></div>";' +
+      'a.shadowRoot.querySelector("x-inner").attachShadow({ mode: "open" }).innerHTML = "<p>Deeply nested shadow paragraph.</p>";' +
+      'a.innerHTML = "<p slot=desc>Slotted light paragraph text.</p><p>Unassigned light child is not rendered.</p>";' +
+      'const p = document.createElement("p"); p.innerHTML = "Updated <x-time>fallback</x-time> by Alice, please <x-link>click here</x-link> now."; document.body.appendChild(p);' +
+      'p.querySelector("x-time").attachShadow({ mode: "open" }).textContent = "7 minutes ago";' +
+      'p.querySelector("x-link").attachShadow({ mode: "open" }).innerHTML = "<a href=#><slot></slot></a>";' +
+      'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
+      'const texts = units.map(function(u){ return u.text; });' +
+      'const slotted = units.find(function(u){ return u.text.indexOf("Slotted light") >= 0; });' +
+      'let projected = false;' +
+      'if (slotted) { const n = NS.Renderer.create(slotted.el, "译文", null, { mode: "sibling", target: slotted.el, typo: slotted.el });' +
+      '  NS.Renderer.insert(n, slotted, { mode: "sibling", target: slotted.el }); projected = !!n.assignedSlot && n.getClientRects().length > 0; }' +
+      'return { texts: texts, roots: units.shadowRoots.length,' +
+      ' heading: texts.some(function(t){ return t.indexOf("Heading inside an open shadow") >= 0; }),' +
+      ' nested: texts.some(function(t){ return t.indexOf("Deeply nested shadow") >= 0; }),' +
+      ' inlineHost: texts.indexOf("Updated 7 minutes ago by Alice, please click here now.") >= 0,' +
+      ' slotted: !!slotted, unassigned: texts.some(function(t){ return t.indexOf("Unassigned light child") >= 0; }), projected: projected }; })()');
+    check('open 影子根内的标题 / 段落被抽取', shadow.heading, JSON.stringify(shadow.texts));
+    check('嵌套影子根内的段落被抽取', shadow.nested);
+    check('句中的行内组件：读影子文本与 slot 投影，整句不被拆开', shadow.inlineHost);
+    check('影子 / slot 内容不重复抽取', shadow.texts.length === 5, shadow.texts.length + ' 个单元');
+    check('具名 slot 投影的宿主子元素被抽取', shadow.slotted);
+    check('未分配到 slot 的宿主子元素（不显示）被跳过', !shadow.unassigned);
+    check('途经的影子根被上报（供内容脚本观察变化）', shadow.roots === 2, 'roots=' + shadow.roots + '（行内宿主的影子文本并入句子，不单独上报）');
+    check('slot 内原文的译文继承 slot、能正常显示', shadow.projected);
     log('边界用例：' + edge.count + ' 单元，' + JSON.stringify(edge.texts));
   } catch (err) {
     check('抽取测试抛出异常', false, err && err.message);

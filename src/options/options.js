@@ -108,6 +108,10 @@
     setSeg('displaySeg', settings.displayMode);
     setSeg('markSeg', settings.markStyle);
     markPreset();
+    // 不属于任何预设的接口：展开「自定义接口」让用户看得到实际地址（只展开，不替用户收起）
+    const known = NS.PRESETS.some(function (p) { return p.id !== 'custom' && p.baseUrl === settings.baseUrl && p.provider === settings.provider; });
+    if (!known) $('svcMore').open = true;
+    $('siteLists').classList.toggle('hidden', !settings.autoTranslate);
     updatePreview();
     $('version').textContent = 'AI 网页翻译 v' + NS.VERSION;
   }
@@ -189,6 +193,7 @@
       const p = NS.PRESETS.filter(function (x) { return x.id === chip.dataset.id; })[0];
       if (!p) return;
       if (p.id === 'custom') {
+        $('svcMore').open = true;
         save({ provider: 'openai' }).then(function () { $('baseUrl').focus(); });
         return;
       }

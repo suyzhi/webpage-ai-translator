@@ -235,7 +235,7 @@
     const pl = p && typeof p === 'object' ? p : plan(unit, !!p);
     if (pl.mode === 'anchor') {
       const a = unit.anchorNode;
-      if (a && a.parentNode) { a.parentNode.insertBefore(node, a.nextSibling); return 'anchor'; }
+      if (a && a.parentNode) { inheritSlot(node, a); a.parentNode.insertBefore(node, a.nextSibling); return 'anchor'; }
       el.appendChild(node);
       return 'end';
     }
@@ -243,11 +243,18 @@
     if (pl.mode === 'sibling') {
       const parent = target.parentNode;
       if (!parent) return null;
+      inheritSlot(node, target);
       parent.insertBefore(node, target.nextSibling);
       return 'sibling';
     }
     target.appendChild(node);
     return pl.mode === 'inline' ? 'inline' : 'end';
+  }
+
+  /* 原文是投影进具名 slot 的宿主子元素时，译文必须进同一个 slot，否则不会显示 */
+  function inheritSlot(node, ref) {
+    const slot = ref && ref.nodeType === 1 ? ref.getAttribute('slot') : null;
+    if (slot) node.setAttribute('slot', slot);
   }
 
   /* ---------------- 仅译文：隐藏 / 还原原文节点 ---------------- */
