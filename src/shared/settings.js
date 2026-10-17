@@ -43,6 +43,10 @@
       if (s.batchItems === 16) s.batchItems = d.batchItems;
       s.firstBatchChars = Math.min(s.firstBatchChars, s.batchChars);
     }
+    // DeepSeek 官方已把 deepseek-chat 并入 deepseek-flash（服务端只剩别名），迁移到正式名称，免得别名下线后报错
+    if (raw && !(raw.settingsRev >= 3) && s.model === 'deepseek-chat' && /(^|\.)deepseek\.com(\/|:|$)/i.test(s.baseUrl.replace(/^https?:\/\//i, ''))) {
+      s.model = 'deepseek-flash';
+    }
     s.settingsRev = NS.SETTINGS_REV;
     const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations', 'lazyTranslate'];
     for (let i = 0; i < flags.length; i++) s[flags[i]] = !!s[flags[i]];

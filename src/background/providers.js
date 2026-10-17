@@ -110,6 +110,9 @@
       body.enable_thinking = false;
     } else if (/(^|\.)bigmodel\.cn$/i.test(host) && /^glm-(?:4\.[5-9]|[5-9])/i.test(model)) {
       body.thinking = { type: 'disabled' };
+    } else if (/(^|\.)deepseek\.com$/i.test(host) && !NS.isReasoningModel(model)) {
+      // DeepSeek V4 系列（含 deepseek-chat 别名）默认开启思考：实测 8 段批次思考占输出 55%，关闭后输出 token 减半、更快
+      body.thinking = { type: 'disabled' };
     }
   }
 
@@ -164,7 +167,7 @@
     // 只有思考过程、没有正文：推理模型（或思考耗尽了输出上限）。把思考当译文只会解析失败、反复重试烧 token，
     // 直接按致命错误停下并提示换模型。
     if ((typeof content !== 'string' || !content) && msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
-      const err = new Error('模型只返回了思考过程、没有译文：请改用非推理模型（如 deepseek-chat），推理模型翻译费用高数倍');
+      const err = new Error('模型只返回了思考过程、没有译文：请改用非推理模型（如 deepseek-flash），推理模型翻译费用高数倍');
       err.fatal = true;
       throw err;
     }

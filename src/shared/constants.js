@@ -14,7 +14,7 @@
   NS.CACHE_PREFIX = 'wpt.c.';
   NS.CACHE_META_KEY = 'wpt.cache.meta.v1';
   NS.USAGE_KEY = 'wpt.usage.v1';
-  NS.SETTINGS_REV = 2;           // 设置结构修订号：低于此值的已存设置会做一次性迁移
+  NS.SETTINGS_REV = 3;          // 设置结构修订号：低于此值的已存设置会做一次性迁移
 
   NS.MSG = {
     PING: 'wpt:ping',
@@ -92,7 +92,7 @@
   /* 供应商预设：baseUrl 只需写到 /v1，适配器会自动补 /chat/completions */
   NS.PRESETS = [
     { id: 'openai',     label: 'OpenAI',            provider: 'openai',    baseUrl: 'https://api.openai.com/v1',                        model: 'gpt-4o-mini',                  keyUrl: 'https://platform.openai.com/api-keys' },
-    { id: 'deepseek',   label: 'DeepSeek 深度求索',  provider: 'openai',    baseUrl: 'https://api.deepseek.com/v1',                      model: 'deepseek-chat',                keyUrl: 'https://platform.deepseek.com/api_keys' },
+    { id: 'deepseek',   label: 'DeepSeek 深度求索',  provider: 'openai',    baseUrl: 'https://api.deepseek.com/v1',                      model: 'deepseek-flash',               keyUrl: 'https://platform.deepseek.com/api_keys' },
     { id: 'qwen',       label: '阿里通义千问',        provider: 'openai',    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus',                   keyUrl: 'https://bailian.console.aliyun.com/' },
     { id: 'moonshot',   label: '月之暗面 Kimi',       provider: 'openai',    baseUrl: 'https://api.moonshot.cn/v1',                       model: 'moonshot-v1-8k',               keyUrl: 'https://platform.moonshot.cn/console/api-keys' },
     { id: 'zhipu',      label: '智谱 GLM',            provider: 'openai',    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',             model: 'glm-4-flash',                  keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys' },

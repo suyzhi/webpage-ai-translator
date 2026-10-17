@@ -345,6 +345,14 @@ test('settings：旧版默认批次大小一次性迁移，用户自定义值与
   assert.equal(S.normalize({ batchChars: 1200, batchItems: 16, settingsRev: 2 }).batchChars, 1200, '迁移后用户再改回 1200 应保留');
 });
 
+test('settings：DeepSeek 官方的 deepseek-chat 别名迁移为 deepseek-flash，其他平台与已迁移设置不动', () => {
+  const S = WPT.settings;
+  assert.equal(S.normalize({ baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', settingsRev: 2 }).model, 'deepseek-flash');
+  assert.equal(S.normalize({ baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-chat', settingsRev: 2 }).model, 'deepseek-chat');
+  assert.equal(S.normalize({ baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', settingsRev: 3 }).model, 'deepseek-chat');
+  assert.equal(WPT.PRESETS.find((p) => p.id === 'deepseek').model, 'deepseek-flash');
+});
+
 test('settings：网站名单规范化与匹配（含子域名）', () => {
   const S = WPT.settings;
   const s = S.normalize({ autoTranslate: true, autoSites: 'https://www.Example.com/path\n*.foo.org, 127.0.0.1:8080\nexample.com', neverSites: ['ads.example.com'] });

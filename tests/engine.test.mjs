@@ -495,6 +495,12 @@ test('省 token：OpenAI 兼容请求带 max_tokens（推理模型除外），�
   assert.equal(calls[1].body.max_tokens, undefined, 'gpt-5 / o 系列不设上限');
   assert.equal(calls[2].body.enable_thinking, false);
   assert.deepEqual(calls[3].body.thinking, { type: 'disabled' });
+
+  const ds = Object.assign({}, BASE_SETTINGS, { baseUrl: 'https://api.deepseek.com/v1' });
+  await WPT.providers.call(Object.assign({}, ds, { model: 'deepseek-flash' }), msg);
+  await WPT.providers.call(Object.assign({}, ds, { model: 'deepseek-reasoner' }), msg);
+  assert.deepEqual(calls[4].body.thinking, { type: 'disabled' }, 'DeepSeek V4 默认思考，翻译时关闭');
+  assert.equal(calls[5].body.thinking, undefined, '用户明确选了推理模型时不干预');
 });
 
 test('省 token：只返回思考过程的推理模型按致命错误停止，不反复重试', async () => {
