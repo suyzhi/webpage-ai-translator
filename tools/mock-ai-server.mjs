@@ -12,7 +12,7 @@
  * 端点：
  *   GET  /<path>                  以仓库根目录为根提供静态文件
  *   GET  /__stats                 返回请求数 / 批次数 / 峰值并发等统计
- *   POST /v1/chat/completions     按 <t id="n">…</t> 批量协议返回译文
+ *   POST /v1/chat/completions     按「N|文本」行协议返回译文
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -49,9 +49,6 @@ if (DICT_PATH) {
   console.log('已加载词典 ' + DICT_PATH + '（' + Object.keys(DICT).length + ' 条）');
 }
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const unesc = (s) => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-  .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 
 const stats = { requests: 0, segments: 0, batches: [], texts: [], inflight: 0, peak: 0, startedAt: Date.now() };
 
@@ -77,16 +74,17 @@ const server = http.createServer((req, res) => {
       let json = {};
       try { json = JSON.parse(body); } catch (e) {}
       const user = ((json.messages || []).find((m) => m.role === 'user') || {}).content || '';
-      const segs = [...user.matchAll(/<t id="(\d+)">([\s\S]*?)<\/t>/g)];
+      // 行协议：每段一行「N|文本」，段内换行为 <br>
+      const segs = [...user.matchAll(/^(\d+)\|(.*)$/gm)].map((m) => [m[0], m[1], m[2].replace(/<br>/g, '\n')]);
       stats.requests++;
       stats.segments += segs.length;
       stats.batches.push(segs.length);
-      for (const m of segs) stats.texts.push(unesc(m[2]));
+      for (const m of segs) stats.texts.push(m[2]);
       stats.inflight++;
       stats.peak = Math.max(stats.peak, stats.inflight);
       console.log('[mock] 请求 #' + stats.requests + '：' + segs.length + ' 段' + (json.model ? '（模型 ' + json.model + '）' : ''));
       const content = segs
-        .map((m) => '<t id="' + m[1] + '">' + esc(translate(unesc(m[2]))) + '</t>')
+        .map((m) => m[1] + '|' + translate(m[2]).replace(/\r?\n/g, '<br>'))
         .join('\n');
       setTimeout(() => {
         stats.inflight--;

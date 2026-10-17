@@ -115,16 +115,15 @@ function makeFetch(handler) {
 /* 从请求体里取出批量片段，返回 [{id, text}] */
 function segmentsOf(call) {
   const user = call.body.messages.find((m) => m.role === 'user').content;
-  const out = [];
-  const re = /<t id="(\d+)">([\s\S]*?)<\/t>/g;
-  let m;
-  while ((m = re.exec(user)) !== null) out.push({ id: Number(m[1]), text: m[2] });
-  return out;
+  return user.split('\n').map((line) => {
+    const m = /^(\d+)\|(.*)$/.exec(line);
+    return { id: Number(m[1]), text: m[2] };
+  });
 }
 
 function echoTranslator(prefix) {
   return (call) => ({
-    content: segmentsOf(call).map((s) => '<t id="' + s.id + '">' + (prefix || '\u8bd1') + '|' + s.text + '</t>').join('\n')
+    content: segmentsOf(call).map((s) => s.id + '|' + (prefix || '\u8bd1') + '|' + s.text).join('\n')
   });
 }
 
@@ -222,7 +221,7 @@ test('引擎：模型返回缺片段时自动补翻，不丢内容', async () =>
     const segs = segmentsOf(c);
     if (call === 1) {
       // 第一次只返回一半，模拟模型偷懒
-      return { content: '<t id="' + segs[0].id + '">\u8bd1|' + segs[0].text + '</t>' };
+      return { content: segs[0].id + '|\u8bd1|' + segs[0].text };
     }
     return echoTranslator()(c);
   });
@@ -484,7 +483,7 @@ test('省 token：增量任务（quickStart=false）不再切小首批', async (
 });
 
 test('省 token：OpenAI 兼容请求带 max_tokens（推理模型除外），已知平台关闭思考', async () => {
-  const calls = makeFetch(() => ({ content: '<t id="1">x</t>' }));
+  const calls = makeFetch(() => ({ content: '1|x' }));
   const msg = { system: 's', user: 'u', maxTokens: 1234 };
   await WPT.providers.call(isolated('mt', { model: 'deepseek-chat' }), msg);
   await WPT.providers.call(isolated('mt', { model: 'gpt-5-mini' }), msg);
@@ -539,7 +538,7 @@ test('用量统计：解析 OpenAI / DeepSeek / Anthropic 的 usage 并在引擎
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     const isAnth = /\/messages$/.test(url);
-    const segs = (isAnth ? body.messages[0].content : body.messages[1].content).match(/<t id="\d+">[\s\S]*?<\/t>/g).join('\n');
+    const segs = isAnth ? body.messages[0].content : body.messages[1].content;
     const payload = isAnth
       ? { content: [{ type: 'text', text: segs }], usage: { input_tokens: 10, cache_read_input_tokens: 30, output_tokens: 7 } }
       : { choices: [{ message: { content: segs } }], usage: { prompt_tokens: 40, completion_tokens: 7, prompt_cache_hit_tokens: 30 } };

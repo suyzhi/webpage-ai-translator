@@ -4,7 +4,7 @@
  * 关键设计：
  *  1. 去重          —— 页面内相同文本只请求一次，结果广播给所有副本（含后续增量加入的副本）；
  *  2. 缓存          —— hash(系统提示词 + 原文) 为键，命中直接秒回；
- *  3. 批量协议      —— <t id="n">…</t>，一次请求翻译多个段落，显著降低往返开销；
+ *  3. 批量协议      —— 每段一行「N|文本」，一次请求翻译多个段落，显著降低往返开销（见 prompt.js）；
  *  4. 占位符保护    —— URL / 邮箱 / 模板变量先替换为 ⟦n⟧，避免被模型改写；
  *  5. 并发控制      —— 同一端点 + 密钥的所有任务共享一个限流器（跨标签页），
  *                      429 时 AIMD 降速 + 全局冷却，而不是各批次各自重试形成 429 风暴；
@@ -154,7 +154,7 @@
     }
     if (!pending.length) return;
 
-    // 3) 组装批量请求项（占位符保护 -> XML 转义）
+    // 3) 组装批量请求项（占位符保护）
     const work = [];
     for (let i = 0; i < pending.length; i++) {
       const e = pending[i];
@@ -162,7 +162,6 @@
       work.push({
         ref: ++this.ref,
         entry: e,
-        escaped: U.escapeXml(prot.text),
         sourceProtected: prot.text,
         tokens: prot.tokens,
         ids: e.ids,
@@ -290,9 +289,9 @@
 
   /* 每个请求内部从 1 重新编号：任务级流水号在长页面上会涨到 4~5 位，每段都白白多花 token */
   Engine.prototype.callOnce = async function (batch) {
-    const parts = [];
-    for (let i = 0; i < batch.length; i++) parts.push('<t id="' + (i + 1) + '">' + batch[i].escaped + '</t>');
-    const user = parts.join('\n');
+    const items = [];
+    for (let i = 0; i < batch.length; i++) items.push({ id: i + 1, text: batch[i].sourceProtected });
+    const user = NS.prompt.buildUser(items);
     await this.limiter.acquire(this.signal);
     let raw;
     const meta = {};
@@ -330,8 +329,7 @@
   /* ---------------- 结果落地 ---------------- */
   Engine.prototype.pushResult = function (item, raw) {
     if (item.done) return;
-    let text = U.unescapeXml(raw);
-    text = U.restoreTokens(text, item.tokens);
+    let text = U.restoreTokens(raw, item.tokens);
     text = U.ensureTokensPreserved(item.sourceProtected, text, item.tokens).trim();
     if (!text) { this.pushFailed(item, new Error('译文为空')); return; }
     item.done = true;

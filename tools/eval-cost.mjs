@@ -63,16 +63,16 @@ async function runSite(id, texts) {
       rec.requests++;
       rec.sysTok += estTokens(msg.system);
       rec.userTok += estTokens(msg.user);
-      const segs = [...msg.user.matchAll(/<t id="(\d+)">([\s\S]*?)<\/t>/g)];
+      const segs = msg.user.split('\n');
       rec.items.push(segs.length);
-      const out = segs.map((m) => '<t id="' + m[1] + '">' + m[2] + '</t>').join('\n');
+      const out = msg.user;
       meta.usage = { input: Math.round(estTokens(msg.system) + estTokens(msg.user)), output: Math.round(estTokens(out)), cached: 0 };
       return out;
     };
   } else {
     NS.providers.call = async (s, msg, signal, meta) => {
       rec.requests++;
-      rec.items.push((msg.user.match(/<t id=/g) || []).length);
+      rec.items.push(msg.user.split('\n').length);
       return realCall(s, msg, signal, meta);
     };
   }

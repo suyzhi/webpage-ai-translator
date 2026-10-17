@@ -231,7 +231,7 @@
     const started = Date.now();
     const meta = {};
     const out = await call(settings, { system: t.system, user: t.user, maxTokens: 64 }, signal, meta);
-    return { text: out.trim(), ms: Date.now() - started, usage: meta.usage || null };
+    return { text: NS.prompt.parse(out).get(1) || out.trim(), ms: Date.now() - started, usage: meta.usage || null };
   }
 
   function estimateMaxTokens(userText) {

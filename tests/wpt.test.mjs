@@ -223,15 +223,25 @@ test('buildSystem 包含目标语言与自定义指令', () => {
   assert.ok(sys.includes('Japanese'));
   assert.ok(sys.includes('English'));
   assert.ok(sys.includes('\u4fdd\u7559\u672f\u8bed'));
-  assert.ok(sys.includes('<t id="N">'));
+  assert.ok(sys.includes('N|text'));
 });
 
-test('buildUser 生成规范的批量协议', () => {
-  const user = WPT.prompt.buildUser([{ id: 1, text: 'Hello &amp; bye' }, { id: 2, text: 'Second' }]);
-  assert.equal(user, '<t id="1">Hello &amp; bye</t>\n<t id="2">Second</t>');
+test('buildUser 生成行协议：不做 XML 转义，段内换行编码为 <br>', () => {
+  const user = WPT.prompt.buildUser([{ id: 1, text: 'Tom & <Jerry>' }, { id: 2, text: 'Line one\nLine two' }]);
+  assert.equal(user, '1|Tom & <Jerry>\n2|Line one<br>Line two');
 });
 
-test('parse 解析标准返回', () => {
+test('parse 解析行协议：<br> 还原换行、续行并入上一段、重复编号取第一次', () => {
+  const m = WPT.prompt.parse('1|你好<br>世界\n2| A & B \n续行\n2|重复\n3|x|y');
+  assert.equal(m.get(1), '你好\n世界');
+  assert.equal(m.get(2), 'A & B\n续行');
+  assert.equal(m.get(3), 'x|y', '只按第一个竖线切分');
+  const fenced = WPT.prompt.parse('```\n1|你好\n2|世界\n```');
+  assert.equal(fenced.get(2), '世界');
+});
+
+test('parse 兼容旧标签协议（并做 XML 反转义）', () => {
+  assert.equal(WPT.prompt.parse('<t id="1">A &amp; B</t>').get(1), 'A & B');
   const m = WPT.prompt.parse('<t id="1">\u4f60\u597d</t>\n<t id="2">\u4e16\u754c</t>');
   assert.equal(m.get(1), '\u4f60\u597d');
   assert.equal(m.get(2), '\u4e16\u754c');
