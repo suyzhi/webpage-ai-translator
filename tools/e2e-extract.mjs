@@ -114,7 +114,10 @@ async function main() {
       + '<p translate="no">Skipped by translate attr.</p>'
       + '<p class="notranslate">Skipped by class.</p>'
       + '<div><span>Inline only sentence that should merge into its block.</span></div>'
-      + '<p>Same text.</p><p>Same text.</p>';
+      + '<p>Same text.</p><p>Same text.</p>'
+      + '<main style="display:contents"><div style="display:contents"><p>Paragraph inside display contents wrappers.</p></div></main>'
+      + '<blockquote class="abstract mathjax">Abstract with a lowercase mathjax marker class.</blockquote>'
+      + '<div class="MathJax_Display">display math block must be skipped</div>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -125,13 +128,21 @@ async function main() {
       ' hasSkipped: texts.some(function(t){ return t.indexOf("Skipped by") >= 0; }),' +
       ' hasVisible: texts.some(function(t){ return t.indexOf("Visible paragraph one") >= 0; }),' +
       ' hasInlineOnly: texts.some(function(t){ return t.indexOf("Inline only sentence") >= 0; }),' +
-      ' duplicateKept: texts.filter(function(t){ return t === "Same text."; }).length }; })()');
+      ' duplicateKept: texts.filter(function(t){ return t === "Same text."; }).length,' +
+      ' hasContents: texts.some(function(t){ return t.indexOf("inside display contents") >= 0; }),' +
+      ' contentsRendered: NS.Extractor.isRendered(document.querySelector("main")),' +
+      ' hasMathjaxMarker: texts.some(function(t){ return t.indexOf("lowercase mathjax marker") >= 0; }),' +
+      ' hasMathDisplay: texts.some(function(t){ return t.indexOf("display math block") >= 0; }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
     check('translate=no / .notranslate 被跳过', !edge.hasSkipped);
     check('可见段落被保留', edge.hasVisible);
     check('纯行内块被合并抽取', edge.hasInlineOnly);
     check('抽取阶段保留重复文本（由引擎去重）', edge.duplicateKept === 2, 'dup=' + edge.duplicateKept);
+    check('display:contents 包装层内的段落被抽取', edge.hasContents);
+    check('display:contents 节点视为已渲染（增量扫描）', edge.contentsRendered);
+    check('小写 mathjax 标记类的块被抽取（arXiv 摘要）', edge.hasMathjaxMarker);
+    check('MathJax_Display 公式块被跳过', !edge.hasMathDisplay);
     log('边界用例：' + edge.count + ' 单元，' + JSON.stringify(edge.texts));
   } catch (err) {
     check('抽取测试抛出异常', false, err && err.message);

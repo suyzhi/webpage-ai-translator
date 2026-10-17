@@ -8,3 +8,4 @@ Thumbs.db
 _probe.ps1
 .vscode/
 .idea/
+.cache/

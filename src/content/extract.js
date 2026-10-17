@@ -18,13 +18,16 @@
   const HARD_SKIP_TAGS = new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'PRE', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
     'OPTGROUP', 'SVG', 'MATH', 'CANVAS', 'IFRAME', 'OBJECT', 'EMBED', 'VIDEO', 'AUDIO', 'MAP',
-    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'DIALOG'
+    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'DIALOG', 'MJX-CONTAINER'
   ]);
 
   /* 这些行内元素不单独成单元，但其文本会并入所属块，避免句子被截断 */
   const INLINE_SOFT_SKIP = new Set(['CODE', 'KBD', 'SAMP', 'VAR', 'CITE', 'ABBR']);
 
-  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|highlight|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|MathJax|mwe-math-element|blob-code|linenumber)([-_\s]|$)/i;
+  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|highlight|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|mwe-math-element|blob-code|linenumber)([-_\s]|$)/i;
+  // MathJax 渲染产物的类名区分大小写（MathJax / MathJax_Display）；小写的 "mathjax" 只是「本块含公式、待渲染」的标记，
+  // 例如 arXiv 摘要 <blockquote class="abstract mathjax">，不能整块跳过
+  const MATHJAX_CLASS_RE = /(^|\s)MathJax(_\w+)?(\s|$)/;
   const OPT_OUT_CLASS_RE = /(^|[-_\s])(notranslate|no-?translate|skiptranslate)([-_\s]|$)/i;
   const SKIP_ID_RE = /^wpt-/i;
   const OPT_OUT_ID_RE = /^(?:notranslate|no-?translate)/i;
@@ -67,7 +70,7 @@
     if (el.isContentEditable) return true;
     if (optsOut(el)) return true;
     const cls = el.className;
-    if (typeof cls === 'string' && cls && SKIP_CLASS_RE.test(cls)) return true;
+    if (typeof cls === 'string' && cls && (SKIP_CLASS_RE.test(cls) || MATHJAX_CLASS_RE.test(cls))) return true;
     const id = el.id;
     if (typeof id === 'string' && id && SKIP_ID_RE.test(id)) return true;
     return false;
@@ -79,6 +82,9 @@
     // 需要「透明」且「裁切或 aria-hidden」同时成立 —— 单独的 opacity:0 可能是滚动入场动画的初始状态。
     try {
       const cs = getComputedStyle(el);
+      // display:contents 自身不产生盒子，checkVisibility / getClientRects 恒为「不可见」；
+      // 可见性交给子元素逐个判定（MDN、Next.js、Reddit、BBC 等把整个 <main> 包在这种元素里）
+      if (cs.display === 'contents') return true;
       if (cs.opacity === '0' && (cs.overflow === 'hidden' || cs.overflow === 'clip' ||
           (el.getAttribute && el.getAttribute('aria-hidden') === 'true'))) return false;
     } catch (e) { /* 继续 */ }
@@ -328,7 +334,8 @@
   function isRendered(node) {
     const el = node && (node.nodeType === 1 ? node : node.parentElement);
     if (!el) return false;
-    if (typeof el.checkVisibility === 'function') {
+    // display:contents 的节点自身没有盒子，checkVisibility 恒为假；交给下面逐级的 isVisible 判定
+    if (typeof el.checkVisibility === 'function' && getComputedStyle(el).display !== 'contents') {
       try { if (!el.checkVisibility({ visibilityProperty: true })) return false; } catch (e) { /* 忽略 */ }
     }
     for (let c = el, d = 0; c && c !== document.body && d < 60; c = c.parentElement, d++) {

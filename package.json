@@ -12,6 +12,8 @@
     "test:social": "node tools/e2e-social.mjs",
     "test:lazy": "node tools/e2e-lazy.mjs",
     "bench": "node tools/bench.mjs",
+    "eval:coverage": "node tools/eval-coverage.mjs",
+    "eval:cost": "node tools/eval-cost.mjs",
     "icons": "node tools/make-icons.mjs"
   },
   "license": "MIT"
