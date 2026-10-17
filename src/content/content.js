@@ -52,6 +52,8 @@
     timerId: 0,
     observer: null,
     shadowRoots: new Set(),     // 抽取时途经的影子根：document 上的观察者看不到其内部变化，需逐个观察
+    clipCheck: [],              // 刚插入的块级译文：下一帧检查是否被容器裁切
+    clipTimer: 0,
     io: null,
     nearIO: null,
     armTimer: 0,
@@ -161,7 +163,8 @@
       }
       box.classList.add('show');
       if (o.duration !== 0) {
-        hideTimer = setTimeout(hide, o.duration || (o.kind === 'err' ? 8000 : 3200));
+        // 成功提示尽量不打扰（还原随时可用快捷键 / 弹出面板），错误提示留足阅读时间
+        hideTimer = setTimeout(hide, o.duration || (o.kind === 'err' ? 8000 : 1600));
       }
     }
 
@@ -695,11 +698,77 @@
         if (only && !j.u.hidden) j.u.hidden = R.hideOriginal(j.u, j.node);
         if (animate && j.u.visible) R.animate(j.node, Math.min(stagger++ * 45, 360));
         if (state.io && j.u.el) { try { state.io.unobserve(j.u.el); } catch (e) {} }
+        if (!only && (mode !== 'inline' || j.plan.nav)) state.clipCheck.push(j.node);
       }
     }
     discardOwnMutations();
+    scheduleClipCheck();
     scheduleRender();
     updateProgress();
+  }
+
+  /*
+   * 被裁切兜底：固定高度 + overflow 的容器里（横向导航条、限高卡片），块级译文会被截掉，
+   * 只剩「Schlagz 是一段」这样的碎片。渲染后的下一帧统一检查（先全部读、再全部写），
+   * 被裁切的改为行内追加在原文之后。
+   */
+  function scheduleClipCheck() {
+    if (state.clipTimer || !state.clipCheck.length) return;
+    state.clipTimer = document.hidden ? setTimeout(checkClipped, 50) : requestAnimationFrame(checkClipped);
+  }
+
+  function checkClipped() {
+    state.clipTimer = 0;
+    const list = state.clipCheck;
+    state.clipCheck = [];
+    if (!state.settings || onlyTranslation()) return;
+    const fix = [];
+    const drop = [];
+    for (let i = 0; i < list.length; i++) {
+      const node = list[i];
+      const u = node.isConnected ? state.nodeUnit.get(node) : null;
+      if (!u || u.dead || !u.el) continue;
+      // 入场动画（上浮 + 位移）期间矩形带着 transform，会被误判为溢出：动画结束后再查
+      const anims = typeof node.getAnimations === 'function' ? node.getAnimations() : [];
+      if (anims.length) {
+        Promise.all(anims.map(function (a) { return a.finished; })).catch(function () {}).then(function () {
+          state.clipCheck.push(node);
+          scheduleClipCheck();
+        });
+        continue;
+      }
+      if (u.plan && u.plan.nav) {
+        // 导航条里的行内译文放不下：直接撤掉，不再尝试别的位置
+        if (R.navMisfit(node, u.el)) drop.push([u, node]);
+        continue;
+      }
+      if (u.plan && u.plan.mode === 'inline' && !u.clipFallback) continue;
+      if (R.isClipped(node, u.el)) fix.push([u, node]);
+    }
+    for (let i = 0; i < drop.length; i++) {
+      drop[i][1].remove();
+      state.nodes.delete(drop[i][0].id);
+    }
+    for (let i = 0; i < fix.length; i++) {
+      const u = fix[i][0];
+      const node = fix[i][1];
+      node.remove();
+      if (u.clipFallback) {
+        // 改成行内后仍被截（容器太窄、换行后超出）：宁可不显示，也不留半截碎片
+        state.nodes.delete(u.id);
+        continue;
+      }
+      const plan = { mode: 'inline', target: u.el, typo: null, only: false };
+      const repl = R.create(u.el, node.textContent, state.settings, plan);
+      if (!R.insert(repl, u, plan)) continue;
+      u.plan = plan;
+      u.clipFallback = true;
+      state.nodes.set(u.id, repl);
+      state.nodeUnit.set(repl, u);
+      state.clipCheck.push(repl);                  // 再查一次
+    }
+    discardOwnMutations();
+    scheduleClipCheck();
   }
 
   /*

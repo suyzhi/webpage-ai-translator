@@ -170,6 +170,9 @@ node tools/mock-ai-server.mjs --dict demo/showcase-dict.json
 ### 2. 批量协议（`prompt.js`）
 每段一行 `N|文本`，段内换行写作 `<br>`，原文不做 XML 转义。比旧的 `<t id="n">…</t>` 标签省 token：真实 DeepSeek 整页实测输入 −12%、输出 −20%，格式遵循率不变。
 解析容错：以 `N|` 开头的行开始一段、其余非空行并入上一段 → 兼容旧标签格式 → 仍缺片段则二分拆分为逐条重译。
+在 DeepSeek / OpenAI / OpenRouter 上走**流式输出**：一出现新的一行 `N|` 就确认上一段完成并立即显示，读者不必等整批（实测段等待中位数 4.4 s → 2.6 s）；中途断流只重发未显示的段落。
+
+**放不下的译文**：渲染后（入场动画结束后）检查译文是否超出定高的容器——被截掉，或溢出压住后面的内容——改为行内追加在原文之后，仍放不下就不显示；横向导航条里的短标签一律行内，与原文不在同一行就撤掉。仅屏幕阅读器可见的文字（`.sr-only`、跳转链接）不翻译。
 
 ### 3. 性能优化
 | 手段 | 收益 |
@@ -217,7 +220,8 @@ npm run test:extract
 # 真实网站评测（指标定义与历次结果见 docs/metrics.md）：
 npm run eval:coverage                     # 42 个真实网站的抽取召回率与漏抽原因
 npm run eval:cost                         # 用上一步抓到的真实段落离线重放，统计 token 放大系数
-DEEPSEEK_API_KEY=sk-… npm run eval:cost -- --real --only wikipedia,mdn   # 真实 API：token、耗时、失败数
+DEEPSEEK_API_KEY=sk-… npm run eval:cost -- --real --only wikipedia,mdn   # 真实 API：token、耗时、段等待、失败数
+npm run eval:layout                       # 真实网站首屏翻译后的版面：被截 / 溢出压字 / 被遮挡 / 横向滚动，附截图
 
 # 插件 UI 回归：断言 popup/options 布局与保存链路，并输出浅色/深色截图
 npm run test:ui

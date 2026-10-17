@@ -76,6 +76,20 @@
     return false;
   }
 
+  /*
+   * 「仅屏幕阅读器可见」的文字（.sr-only、跳转链接、图标按钮的隐藏标签）：checkVisibility 认为可见，
+   * 但用户看不到。翻译它们白花 token，译文还会作为可见的兄弟节点冒出来（如维基百科 ☰ 图标下的零散译文）。
+   * 识别常见写法：绝对定位 + 零面积 clip / clip-path: inset(50%) / 1px 尺寸且裁切溢出。
+   */
+  const CLIP_RECT_RE = /rect\(\s*(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px\s*\)/;
+  function visuallyHidden(cs) {
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return false;
+    const m = cs.clip && cs.clip !== 'auto' ? CLIP_RECT_RE.exec(cs.clip) : null;
+    if (m && (Number(m[3]) <= Number(m[1]) || Number(m[2]) <= Number(m[4]))) return true;   // top>=bottom 或 left>=right
+    if (cs.clipPath && /^inset\(\s*(50|100)%/.test(cs.clipPath)) return true;
+    return cs.overflow !== 'visible' && parseFloat(cs.width) <= 1 && parseFloat(cs.height) <= 1;
+  }
+
   function isVisible(el) {
     if (el.hasAttribute && el.hasAttribute('hidden')) return false;
     // 虚拟列表的离屏占位（如 Mastodon：固定高度 + overflow:hidden + opacity:0，内部是原始 HTML 文本）。
@@ -85,6 +99,7 @@
       // display:contents 自身不产生盒子，checkVisibility / getClientRects 恒为「不可见」；
       // 可见性交给子元素逐个判定（MDN、Next.js、Reddit、BBC 等把整个 <main> 包在这种元素里）
       if (cs.display === 'contents') return true;
+      if (visuallyHidden(cs)) return false;
       if (cs.opacity === '0' && (cs.overflow === 'hidden' || cs.overflow === 'clip' ||
           (el.getAttribute && el.getAttribute('aria-hidden') === 'true'))) return false;
     } catch (e) { /* 继续 */ }

@@ -117,7 +117,11 @@ async function main() {
       + '<p>Same text.</p><p>Same text.</p>'
       + '<main style="display:contents"><div style="display:contents"><p>Paragraph inside display contents wrappers.</p></div></main>'
       + '<blockquote class="abstract mathjax">Abstract with a lowercase mathjax marker class.</blockquote>'
-      + '<div class="MathJax_Display">display math block must be skipped</div>';
+      + '<div class="MathJax_Display">display math block must be skipped</div>'
+      + '<a href="#c" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Skip to main content</a>'
+      + '<button><span style="position:absolute;clip:rect(1px,1px,1px,1px);width:1px;height:1px;overflow:hidden">Main menu</span>☰</button>'
+      + '<span style="position:absolute;clip-path:inset(50%)">Screen reader only label</span>'
+      + '<div style="position:absolute;left:0;top:0;width:300px">Absolutely positioned but visible caption text.</div>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -132,7 +136,9 @@ async function main() {
       ' hasContents: texts.some(function(t){ return t.indexOf("inside display contents") >= 0; }),' +
       ' contentsRendered: NS.Extractor.isRendered(document.querySelector("main")),' +
       ' hasMathjaxMarker: texts.some(function(t){ return t.indexOf("lowercase mathjax marker") >= 0; }),' +
-      ' hasMathDisplay: texts.some(function(t){ return t.indexOf("display math block") >= 0; }) }; })()');
+      ' hasMathDisplay: texts.some(function(t){ return t.indexOf("display math block") >= 0; }),' +
+      ' hasSrOnly: texts.some(function(t){ return /Skip to main|Main menu|Screen reader only/.test(t); }),' +
+      ' hasAbsCaption: texts.some(function(t){ return t.indexOf("Absolutely positioned but visible") >= 0; }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
     check('translate=no / .notranslate 被跳过', !edge.hasSkipped);
@@ -143,6 +149,8 @@ async function main() {
     check('display:contents 节点视为已渲染（增量扫描）', edge.contentsRendered);
     check('小写 mathjax 标记类的块被抽取（arXiv 摘要）', edge.hasMathjaxMarker);
     check('MathJax_Display 公式块被跳过', !edge.hasMathDisplay);
+    check('仅屏幕阅读器可见的文字（clip / clip-path / 1px）被跳过', !edge.hasSrOnly, JSON.stringify(edge.texts));
+    check('普通的绝对定位文字照常抽取', edge.hasAbsCaption);
 
     // 4) Shadow DOM：open 影子根、嵌套影子根、具名 slot 投影的宿主子元素
     const shadow = await cdp.evalIn(session, HEAD +

@@ -46,8 +46,32 @@
     let v = visCache.get(el);
     if (v === undefined) {
       try { v = el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); } catch (e) { v = el.getClientRects().length > 0; }
+      if (v) v = !srOnly(el);
       visCache.set(el, v);
     }
+    return v;
+  }
+
+  /*
+   * 仅屏幕阅读器可见（.sr-only：绝对定位 + 零面积 clip / clip-path / 1px 裁切）：
+   * 1px 盒子不影响文字自身的 Range 矩形，必须按祖先样式判定，否则基准会把这些看不见的字当成应翻文本。
+   */
+  const srCache = new Map();
+  const CLIP_RE = /rect\(\s*(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px\s*\)/;
+  function srOnly(el) {
+    if (!el || el.nodeType !== 1) return false;
+    let v = srCache.get(el);
+    if (v !== undefined) return v;
+    const s = cs(el);
+    v = false;
+    if (s.position === 'absolute' || s.position === 'fixed') {
+      const m = s.clip && s.clip !== 'auto' ? CLIP_RE.exec(s.clip) : null;
+      v = !!(m && (Number(m[3]) <= Number(m[1]) || Number(m[2]) <= Number(m[4]))) ||
+        /^inset\(\s*(50|100)%/.test(s.clipPath || '') ||
+        (s.overflow !== 'visible' && parseFloat(s.width) <= 1 && parseFloat(s.height) <= 1);
+    }
+    if (!v) v = srOnly(composedParent(el));
+    srCache.set(el, v);
     return v;
   }
 

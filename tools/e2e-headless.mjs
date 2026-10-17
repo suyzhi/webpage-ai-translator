@@ -66,6 +66,22 @@ async function main() {
     const pageSession = (await cdp.send('Target.attachToTarget', { targetId: page.targetId, flatten: true })).sessionId;
     await cdp.send('Runtime.enable', {}, pageSession);
     await waitFor('演示页加载完成', async () => (await cdp.evalIn(pageSession, 'document.readyState')) === 'complete', 20000);
+    // 固定高度、overflow:hidden 的横向导航条：块级译文会被截掉，应自动改为行内追加
+    await cdp.evalIn(pageSession, '(function(){ const n = document.createElement("nav"); n.id = "e2e-strip";' +
+      ' n.style.cssText = "display:flex;gap:20px;height:34px;overflow:hidden;align-items:flex-start;padding:6px 12px";' +
+      ' n.innerHTML = ["Headlines today", "Ukraine war", "Climate desk"].map(function(t){ return \'<a href="#" style="display:block;flex:0 0 auto"><span style="display:block">\' + t + "</span></a>"; }).join("");' +
+      ' const box = document.createElement("div"); box.id = "e2e-narrow"; box.style.cssText = "width:110px;height:22px;overflow:hidden";' +
+      ' box.innerHTML = "<p style=\\"margin:0\\">Weather alerts</p>";' +
+      ' document.body.insertBefore(box, document.body.firstChild); document.body.insertBefore(n, document.body.firstChild);' +
+      // 横向导航（Microsoft Learn 式）：块级 a > span 的菜单项，最后一项定宽很窄
+      ' const menu = document.createElement("nav"); menu.id = "e2e-menu";' +
+      ' menu.innerHTML = \'<ul style="display:flex;gap:18px;list-style:none;margin:0;padding:8px 12px">\' + ["Release notes", "Developer tools", "Pricing plans"].map(function(t, i){' +
+      '   return \'<li\' + (i === 2 ? \' style="width:96px"\' : "") + \'><a href="#" style="display:block"><span style="display:block">\' + t + "</span></a></li>"; }).join("") + "</ul>";' +
+      ' document.body.insertBefore(menu, document.body.firstChild);' +
+      // 定高但 overflow 可见：块级译文会溢出压住下一段
+      ' const spill = document.createElement("section"); spill.id = "e2e-spill";' +
+      ' spill.innerHTML = \'<div style="height:28px;line-height:24px"><p style="margin:0">Important update for readers</p></div><p id="e2e-next" style="margin:0">Following paragraph stays readable.</p>\';' +
+      ' document.body.insertBefore(spill, document.body.firstChild); return true; })()');
 
     const trigger = await cdp.evalIn(optSession, '(async () => { const tabs = await chrome.tabs.query({ url: "' + MOCK + '/*" }); if (!tabs.length) return { error: "no tab" }; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: tabs[0].id, toggle: true }); return { tabId: tabs[0].id, r }; })()');
     check('内容脚本注入', trigger && trigger.r && trigger.r.ok, JSON.stringify(trigger));
@@ -85,6 +101,22 @@ async function main() {
     check('译文数量与状态一致', dom.count === state.translated, dom.count + ' vs ' + state.translated);
     check('首个译文为目标语言', /[\u4e00-\u9fff]/.test(dom.firstText || ''), (dom.firstText || '').slice(0, 40));
     check('网页标题已翻译', /[\u4e00-\u9fff]/.test(dom.title || ''), dom.title);
+
+    await sleep(1200);                                 // 裁切检查在入场动画结束后（380ms + 错峰最多 360ms）
+    const strip = await cdp.evalIn(pageSession, '(function(){ const nav = document.getElementById("e2e-strip"); const nb = nav.getBoundingClientRect().bottom;' +
+      ' const ts = [].slice.call(nav.querySelectorAll(".wpt-translation")); return { n: ts.length, inline: ts.filter(function(t){ return t.style.display === "inline"; }).length,' +
+      ' visible: ts.filter(function(t){ return t.getBoundingClientRect().bottom <= nb + 1; }).length,' +
+      ' narrow: document.querySelectorAll("#e2e-narrow .wpt-translation").length }; })()');
+    check('定高导航条：被裁切的译文改为行内追加且完整可见', strip.n === 3 && strip.inline === 3 && strip.visible === 3, JSON.stringify(strip));
+    check('改为行内后仍被截的译文不显示（不留半截碎片）', strip.narrow === 0, JSON.stringify(strip));
+    const menu = await cdp.evalIn(pageSession, '(function(){ const items = [].slice.call(document.querySelectorAll("#e2e-menu li"));' +
+      ' return items.map(function(li){ const t = li.querySelector(".wpt-translation"); if (!t) return "none";' +
+      '   const s = li.querySelector("span").getClientRects()[0]; const r = t.getClientRects(); return t.style.display + (r[r.length - 1].bottom <= s.bottom + 2 ? ":same-line" : ":wrapped"); }); })()');
+    const spill = await cdp.evalIn(pageSession, '(function(){ const box = document.querySelector("#e2e-spill > div"); const t = box.querySelector(".wpt-translation");' +
+      ' const next = document.getElementById("e2e-next").getBoundingClientRect(); if (!t) return { t: false };' +
+      ' const r = t.getBoundingClientRect(); return { t: true, display: t.style.display, overlaps: r.bottom > next.top + 1 && r.top < next.bottom }; })()');
+    check('定高容器（overflow 可见）：译文不溢出压住下一段', !spill.t || (spill.display === 'inline' && !spill.overlaps), JSON.stringify(spill));
+    check('横向导航：短标签译文行内同一行，放不下的撤掉', menu[0] === 'inline:same-line' && menu[1] === 'inline:same-line' && menu[2] === 'none', JSON.stringify(menu));
 
     const stats = await httpJson(MOCK + '/__stats');
     check('确实发起了 API 请求', stats.requests > 0, 'requests=' + stats.requests);

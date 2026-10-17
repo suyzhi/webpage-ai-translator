@@ -52,10 +52,27 @@ if (DICT_PATH) {
 
 const stats = { requests: 0, segments: 0, batches: [], texts: [], inflight: 0, peak: 0, startedAt: Date.now() };
 
+/*
+ * 伪中文：长度接近真实英译中（约 0.32 个汉字 / 原文字符，如 30 字符的 "Open source software is great." → 7 字），
+ * 保留数字与换行。用于版面评测（tools/eval-layout.mjs）：译文长度真实、结果可复现、无需密钥。
+ */
+const PSEUDO_ZH = process.argv.includes('--pseudo-zh');
+const ZH_POOL = '这是一段用于版面评估的模拟译文内容长度与真实翻译大致相当便于检查排版效果';
+function pseudoZh(segment) {
+  return segment.split('\n').map((line) => {
+    const n = Math.max(2, Math.round(line.replace(/\s+/g, '').length * 0.32));
+    let out = '';
+    for (let i = 0; i < n; i++) out += ZH_POOL[i % ZH_POOL.length];
+    const nums = line.match(/\d[\d.,:%]*/g);
+    return (nums ? nums.slice(0, 3).join(' ') + ' ' : '') + out + (/[.!?。！？]$/.test(line.trim()) ? '。' : '');
+  }).join('\n');
+}
+
 function translate(segment) {
   const key = segment.replace(/\s+/g, ' ').trim();
   if (DICT && Object.prototype.hasOwnProperty.call(DICT, key)) return DICT[key];
   if (COPY_PROPER && looksProper(key)) return segment;
+  if (PSEUDO_ZH) return pseudoZh(segment);
   return PREFIX + segment;
 }
 

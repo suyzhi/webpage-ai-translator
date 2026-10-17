@@ -180,5 +180,6 @@ export function spawnMockServer(options) {
   if (o.dict) args.push('--dict', o.dict);
   if (o.delay != null) args.push('--delay', String(o.delay));
   if (o.copyProper) args.push('--copy-proper');
+  if (o.pseudoZh) args.push('--pseudo-zh');
   return spawn(process.execPath, args, { cwd: o.root, stdio: ['ignore', 'pipe', 'pipe'] });
 }

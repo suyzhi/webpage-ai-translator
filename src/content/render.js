@@ -40,6 +40,37 @@
     return false;
   }
 
+  /* 位于横向导航条内：nav / 导航类 role，且整条不高（纵向侧栏导航很高，不算） */
+  const NAV_SEL = 'nav,[role="navigation"],[role="menubar"],[role="tablist"]';
+  const NAV_MAX_HEIGHT = 120;
+  function inHorizontalNav(el) {
+    const nav = el.closest ? el.closest(NAV_SEL) : null;
+    if (!nav) return false;
+    const h = nav.getBoundingClientRect().height;
+    return h > 0 && h <= NAV_MAX_HEIGHT;
+  }
+
+  /*
+   * 导航条里的行内译文是否「放不下」：被挤到下一行（原文是单行、译文却从原文下方开始），
+   * 或者撑出容器被截。
+   */
+  function navMisfit(node, src) {
+    const rects = node.getClientRects();
+    if (!rects.length) return false;
+    // 以原文第一个文字节点的首行为准（图标、徽章的盒子高度与文字不同，不能拿来比）
+    const walker = document.createTreeWalker(src, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (t) { return !node.contains(t) && t.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
+    });
+    const first = walker.nextNode();
+    if (!first) return false;
+    const range = document.createRange();
+    range.selectNodeContents(first);
+    const line = range.getClientRects()[0];
+    if (!line) return false;
+    // 必须与原文首行同一行：换到下面、或被绝对定位的下拉层等挤到上面，都算放不下
+    return rects[rects.length - 1].bottom > line.bottom + 2 || rects[0].top < line.top - 2 || isClipped(node, src);
+  }
+
   function isClamped(cs) {
     if (!cs) return false;
     const c = cs.webkitLineClamp || cs.WebkitLineClamp;
@@ -107,8 +138,11 @@
     const short = text.indexOf('\n') < 0 && visualLength(text) <= SHORT_TEXT;
 
     // 横排导航 / 按钮 / 标签：行内追加，保持原有行高
-    if (short && (isRowFlow(pcs) || (cs && (cs.whiteSpace === 'nowrap' || /^inline/.test(cs.display || ''))))) {
-      return { mode: 'inline', target: el, typo: null, only: !!onlyTranslation };
+    // 横向导航条里的短标签（下拉按钮、带图标的菜单项）：块级译文会错位成单独一行，一律行内；
+    // nav 标记交给内容脚本在渲染后复查，不在同一行或被截就撤掉，宁缺毋乱
+    const nav = short && !onlyTranslation && inHorizontalNav(el);
+    if (short && (nav || isRowFlow(pcs) || (cs && (cs.whiteSpace === 'nowrap' || /^inline/.test(cs.display || ''))))) {
+      return { mode: 'inline', target: el, typo: null, only: !!onlyTranslation, nav: nav };
     }
     const src = typographySource(el);
     const inner = src !== el ? src : null;
@@ -257,6 +291,34 @@
     if (slot) node.setAttribute('slot', slot);
   }
 
+  /*
+   * 译文是否「放不下」：原文在某个祖先的范围内，译文却超出该祖先底边。
+   * 正常流里的块级子元素超出祖先，说明祖先高度是定死的——
+   *   overflow 非 visible：译文被截掉（横向导航条、限高卡片）；
+   *   overflow visible：译文溢出去压在后面的内容上（如维基百科横幅里定高的副标题）。
+   * 原文本身也在范围之外的（可滚动侧栏里靠下的条目）只是需要滚动，不算。
+   */
+  function isClipped(node, src) {
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1 || !src || !src.getBoundingClientRect) return false;
+    const sr = src.getBoundingClientRect();
+    for (let a = composedParent(node), d = 0; a && d < 12; a = composedParent(a), d++) {
+      if (a === document.body || a === document.documentElement) break;
+      const cs = css(a);
+      if (!cs || cs.display === 'contents' || /^inline/.test(cs.display)) continue;
+      const ar = a.getBoundingClientRect();
+      if (sr.top >= ar.bottom - 2) return false;
+      if (r.bottom > ar.bottom + 2) return true;
+    }
+    return false;
+  }
+
+  function composedParent(n) {
+    const p = n.parentNode;
+    if (p && p.nodeType === 11 && p.host) return p.host;
+    return p && p.nodeType === 1 ? p : null;
+  }
+
   /* ---------------- 仅译文：隐藏 / 还原原文节点 ---------------- */
   function hideOriginal(unit, node) {
     const el = unit.el;
@@ -352,6 +414,8 @@
     animate: animate,
     createLoader: createLoader,
     insertLoader: insertLoader,
+    isClipped: isClipped,
+    navMisfit: navMisfit,
     hideOriginal: hideOriginal,
     showOriginal: showOriginal,
     copyTypography: copyTypography,
