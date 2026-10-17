@@ -10,6 +10,7 @@
  * 每站保存一张翻译后的首屏截图到 .cache/eval/shots/，供人工过目。
  *
  * 用法：node tools/eval-layout.mjs [--only a,b] [--label 名称]
+ *       DEEPSEEK_API_KEY=… node tools/eval-layout.mjs --real --only wikipedia,mdn   # 真实 DeepSeek 译文（流式），截图存 shots-real/
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,7 +25,8 @@ const arg = (name, def) => { const i = argv.indexOf('--' + name); return i >= 0 
 const ONLY = arg('only', '') ? new Set(arg('only').split(',')) : null;
 const LABEL = arg('label', new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19));
 const OUT_DIR = path.join(ROOT, '.cache', 'eval');
-const SHOTS = path.join(OUT_DIR, 'shots');
+const REAL = argv.includes('--real');
+const SHOTS = path.join(OUT_DIR, REAL ? 'shots-real' : 'shots');
 const SITE_TIMEOUT = 75000;
 const GLOBAL_DEADLINE = Date.now() + 14 * 60000;
 const log = (...a) => console.log('[layout]', ...a);
@@ -128,8 +130,11 @@ async function main() {
     const optS = (await cdp.send('Target.attachToTarget', { targetId: opt.targetId, flatten: true })).sessionId;
     await cdp.send('Runtime.enable', {}, optS);
     await waitFor('设置页就绪', async () => (await cdp.evalIn(optS, 'document.readyState')) === 'complete', 15000);
-    const settings = { provider: 'openai', baseUrl: MOCK + '/v1', apiKey: '', model: 'mock', targetLang: 'zh-CN',
-      displayMode: 'bilingual', concurrency: 4, streaming: false };
+    const settings = REAL
+      ? { provider: 'openai', baseUrl: 'https://api.deepseek.com/v1', apiKey: process.env.DEEPSEEK_API_KEY || '', model: 'deepseek-flash',
+        targetLang: 'zh-CN', displayMode: 'bilingual', concurrency: 4 }
+      : { provider: 'openai', baseUrl: MOCK + '/v1', apiKey: '', model: 'mock', targetLang: 'zh-CN',
+        displayMode: 'bilingual', concurrency: 4, streaming: false };
     await cdp.evalIn(optS, '(async () => { await chrome.storage.local.set({ "wpt.settings.v1": ' + JSON.stringify(settings) + ' }); return true; })()');
     log('扩展 ' + extId + '；站点 ' + sites.length + ' 个');
 
