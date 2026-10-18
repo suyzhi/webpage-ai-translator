@@ -26,6 +26,7 @@ const ONLY = arg('only', '') ? new Set(arg('only').split(',')) : null;
 const LABEL = arg('label', new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19));
 const OUT_DIR = path.join(ROOT, '.cache', 'eval');
 const REAL = argv.includes('--real');
+const FRAMES = argv.includes('--frames');      // 关闭站点隔离并报告每个子框架里的译文数
 const SHOTS = path.join(OUT_DIR, REAL ? 'shots-real' : 'shots');
 const INSPECT = arg('inspect', '') ? fs.readFileSync(arg('inspect'), 'utf8') : '';   // 调试：翻译后在页面里执行的表达式文件
 const SITE_TIMEOUT = 75000;
@@ -135,7 +136,8 @@ async function main() {
   try {
     await waitFor('mock 服务就绪', async () => { await httpJson(MOCK + '/__stats'); return true; }, 15000, 150);
     browser = await launchBrowser({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'wpt-layout-')),
-      args: ['--disable-blink-features=AutomationControlled', '--lang=en-US', '--mute-audio', '--window-size=1366,900'] });
+      args: ['--disable-blink-features=AutomationControlled', '--lang=en-US', '--mute-audio', '--window-size=1366,900']
+        .concat(FRAMES ? ['--disable-features=IsolateOrigins,site-per-process', '--disable-site-isolation-trials'] : []) });
     const { cdp } = browser;
     const ua = (await cdp.send('Browser.getVersion')).userAgent.replace('HeadlessChrome', 'Chrome');
     const extId = (await cdp.send('Extensions.loadUnpacked', { path: ROOT })).id;
@@ -176,6 +178,22 @@ async function main() {
           const doneAt = Date.now();
           await delay(1300);                                 // 等入场动画（380ms + 错峰最多 360ms）与随后的裁切兜底
           const probe = await cdp.evalIn(s, PROBE);
+          if (FRAMES) {
+            // 每个子框架里实际出现的译文数（关闭站点隔离后跨源框架与顶层同进程，可逐个进入隔离世界检查）
+            await delay(1500);
+            const list = [];
+            (function walk(t, d) { if (d) list.push(t.frame); for (const c of t.childFrames || []) walk(c, d + 1); })((await cdp.send('Page.getFrameTree', {}, s)).frameTree, 0);
+            const rows = [];
+            for (const f of list) {
+              try {
+                const { executionContextId } = await cdp.send('Page.createIsolatedWorld', { frameId: f.id, worldName: 'wpt-frames' }, s);
+                const v = (await cdp.send('Runtime.evaluate', { contextId: executionContextId, returnByValue: true,
+                  expression: '({ w: innerWidth, h: innerHeight, chars: document.body ? (document.body.innerText || "").trim().length : 0, n: document.querySelectorAll(".wpt-translation").length })' }, s)).result.value;
+                if (v && v.chars >= 20) rows.push(f.url.slice(0, 60) + ' ' + v.w + 'x' + v.h + ' 字 ' + v.chars + ' 译文 ' + v.n);
+              } catch (e) { rows.push(f.url.slice(0, 60) + ' 无法检查'); }
+            }
+            log(site.id + ' 子框架：' + (rows.length ? '\n  ' + rows.join('\n  ') : '无'));
+          }
           if (INSPECT) log(site.id + ' inspect: ' + JSON.stringify(await cdp.evalIn(s, INSPECT), null, 1));
           const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }, s);
           fs.writeFileSync(path.join(SHOTS, site.id + '.jpg'), Buffer.from(shot.data, 'base64'));

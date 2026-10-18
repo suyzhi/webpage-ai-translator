@@ -48,7 +48,7 @@ importScripts(
 
   async function ensureContent(tabId) {
     try {
-      const r = await chrome.tabs.sendMessage(tabId, { type: NS.MSG.PING });
+      const r = await chrome.tabs.sendMessage(tabId, { type: NS.MSG.PING }, { frameId: 0 });
       if (r && r.ok) return { ok: true, injected: false };
     } catch (e) { /* 未注入 */ }
     try {
@@ -217,7 +217,8 @@ importScripts(
 
   chrome.runtime.onConnect.addListener(function (port) {
     if (port.name !== NS.PORT_NAME) return;
-    const tabId = port.sender && port.sender.tab ? port.sender.tab.id : null;
+    // 徽标只反映顶层页面的进度：子框架（iframe）的任务不改徽标
+    const tabId = port.sender && port.sender.tab && !port.sender.frameId ? port.sender.tab.id : null;
     let chain = Promise.resolve();
 
     port.onMessage.addListener(function (msg) {
@@ -256,6 +257,20 @@ importScripts(
               try { await chrome.tabs.sendMessage(tabId, { type: NS.MSG.TOGGLE }); } catch (e) {}
             }
             return sendResponse(res);
+          }
+          case 'wpt:frames': {
+            // 顶层页面开始 / 还原 / 停止：转发给同一标签页的子框架（开始时先把脚本注入进去）
+            const tabId = sender.tab && sender.tab.id;
+            if (tabId == null || sender.frameId) return sendResponse({ ok: false });
+            let injected = null;
+            if (msg.action === 'start') {
+              try {
+                const res = await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: NS.CONTENT_FILES.slice(), injectImmediately: true });
+                injected = res.length;
+              } catch (e) { injected = String(e && e.message || e); /* 个别框架不可注入（浏览器内部页、已销毁）不影响其余 */ }
+            }
+            try { await chrome.tabs.sendMessage(tabId, { type: 'wpt:frame-cmd', action: msg.action, overrides: msg.overrides || null }); } catch (e) {}
+            return sendResponse({ ok: true, injected: injected });
           }
           case NS.MSG.CACHE_CLEAR:
             await cache.load();

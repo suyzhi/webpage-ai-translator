@@ -11,6 +11,7 @@
     "test:dynamic": "node tools/e2e-dynamic.mjs",
     "test:social": "node tools/e2e-social.mjs",
     "test:lazy": "node tools/e2e-lazy.mjs",
+    "test:frames": "node tools/e2e-frames.mjs",
     "bench": "node tools/bench.mjs",
     "eval:coverage": "node tools/eval-coverage.mjs",
     "eval:cost": "node tools/eval-cost.mjs",

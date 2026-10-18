@@ -25,6 +25,13 @@
   const U = NS.util;
   const R = NS.Renderer;
 
+  /*
+   * 子框架（iframe：Cookie 同意框、嵌入内容）：只听顶层页面经后台转发的「开始 / 还原 / 停止」，
+   * 不弹提示、不改徽标、不响应弹出面板的状态查询 —— 整个标签页对用户来说仍是「一次翻译」。
+   */
+  let IS_CHILD = false;
+  try { IS_CHILD = window.top !== window; } catch (e) { IS_CHILD = true; }
+
   const FRAME_BUDGET_MS = 10;
   const SLICE = 40;
 
@@ -52,8 +59,7 @@
     heartbeat: null,
     reconnectTries: 0,
     renderQueue: [],
-    rafId: 0,
-    timerId: 0,
+    rafId: 0,                   // 待执行渲染的取消函数（nextFrame 返回）
     observer: null,
     shadowRoots: new Set(),     // 抽取时途经的影子根：document 上的观察者看不到其内部变化，需逐个观察
     clipCheck: [],              // 刚插入的块级译文：下一帧检查是否被容器裁切
@@ -81,7 +87,7 @@
   const SETTLE_MS = 2500;
 
   /* ---------------- 页面内提示（Shadow DOM，与页面样式互不干扰） ---------------- */
-  const ui = (function () {
+  const ui = IS_CHILD ? { show: function () {}, hide: function () {} } : (function () {
     let host = null, root = null, box = null, hideTimer = null, removeTimer = null;
     let els = {};
 
@@ -187,6 +193,7 @@
   function setStatus(s) {
     if (state.status === s) return;
     state.status = s;
+    if (IS_CHILD) return;
     // 状态变化时轻触后台（同时可重置 Service Worker 的空闲计时器）
     try {
       const p = chrome.runtime.sendMessage({ type: 'wpt:state-changed', status: s });
@@ -220,15 +227,14 @@
     }
     settings = Object.assign({}, settings, state.overrides || {});
     state.settings = settings;
+    notifyFrames('start');
+    watchFrames(document);
     if (!state.nodes.size) state.hScroll0 = hasHScroll();
     setStatus(NS.STATUS.SCANNING);
     ui.show('正在分析页面…', { kind: 'busy', duration: 0, sub: '提取可翻译段落' });
 
-    // 让提示先绘制出来；后台标签页 rAF 被暂停，改用定时器（否则自动翻译会卡在「分析中」）
-    await new Promise(function (r) {
-      if (document.hidden) setTimeout(r, 0);
-      else requestAnimationFrame(function () { r(); });
-    });
+    // 让提示先绘制出来（拿不到帧时由 nextFrame 的定时器兜底，否则会卡在「分析中」）
+    await new Promise(function (r) { nextFrame(r, 0); });
 
     let units;
     try {
@@ -243,7 +249,7 @@
     if (state.status !== NS.STATUS.SCANNING) return;      // 分析期间被停止 / 还原
     resetMemoIfNeeded(settings);
 
-    if (settings.translateTitle && state.originalTitle == null && document.title &&
+    if (!IS_CHILD && settings.translateTitle && state.originalTitle == null && document.title &&
         U.isTranslatable(U.normalizeText(document.title), NS.settings.forContent(settings), true)) {
       state.originalTitle = document.title;
       units.unshift({ id: 0, el: null, isTitle: true, text: U.normalizeText(document.title), kind: 'partial', anchorNode: null });
@@ -645,11 +651,27 @@
     updateProgress();
   }
 
+  /*
+   * 下一帧执行。拿不到帧时（后台标签页暂停 rAF；滚出视口的 iframe 也不触发 rAF）由定时器兜底：
+   * 隐藏页面直接用 hiddenDelay，可见页面 100 ms 内没等到帧也照常执行。返回取消函数。
+   */
+  function nextFrame(fn, hiddenDelay) {
+    let done = false, raf = 0, timer = 0;
+    function run() {
+      if (done) return;
+      done = true;
+      if (raf) cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      fn();
+    }
+    if (document.hidden) timer = setTimeout(run, hiddenDelay || 0);
+    else { raf = requestAnimationFrame(run); timer = setTimeout(run, 100); }
+    return function () { done = true; if (raf) cancelAnimationFrame(raf); clearTimeout(timer); };
+  }
+
   function scheduleRender() {
-    if (state.rafId || state.timerId || !state.renderQueue.length) return;
-    // 后台标签页 rAF 会被暂停：改用定时器，保证切回来时译文已经就位
-    if (document.hidden) state.timerId = setTimeout(flushRender, 0);
-    else state.rafId = requestAnimationFrame(flushRender);
+    if (state.rafId || !state.renderQueue.length) return;
+    state.rafId = nextFrame(flushRender, 0);            // 存的是取消函数
   }
 
   /*
@@ -671,7 +693,6 @@
   const flushRender = timed('renderMax', flushRenderNow);
   function flushRenderNow() {
     state.rafId = 0;
-    state.timerId = 0;
     if (!state.renderQueue.length || !state.settings) return;
     const settings = state.settings;
     const only = onlyTranslation();
@@ -737,7 +758,7 @@
    */
   function scheduleClipCheck() {
     if (state.clipTimer || !state.clipCheck.length) return;
-    state.clipTimer = document.hidden ? setTimeout(checkClipped, 50) : requestAnimationFrame(checkClipped);
+    state.clipTimer = nextFrame(checkClipped, 50);
   }
 
   /* 撤掉的译文不丢：挂到原文的悬停提示上（不占位置；原文或其外层已有提示的不覆盖） */
@@ -908,6 +929,7 @@
 
   /* ---------------- 还原 / 停止 ---------------- */
   function restore() {
+    notifyFrames('restore');
     stopObserving();
     disconnectPort();
     let removed = 0;
@@ -927,8 +949,7 @@
     if (state.originalTitle != null) { try { document.title = state.originalTitle; } catch (e) {} }
     state.originalTitle = null;
     state.renderQueue.length = 0;
-    if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = 0; }
-    if (state.timerId) { clearTimeout(state.timerId); state.timerId = 0; }
+    if (state.rafId) { state.rafId(); state.rafId = 0; }
     state.byId.clear();
     state.elUnit = new WeakMap();
     state.nodeUnit = new WeakMap();
@@ -949,6 +970,7 @@
   }
 
   function stopJob() {
+    notifyFrames('stop');
     if (state.port) { try { state.port.postMessage({ type: NS.MSG.STOP }); } catch (e) {} }
     disconnectPort();
     stopObserving();
@@ -1041,6 +1063,7 @@
       for (let j = 0; j < added.length; j++) {
         const n = added[j];
         if (isOurs(n)) continue;
+        if (n.nodeType === 1) watchFrames(n);
         if (n.nodeType === 3) {
           const p = n.parentNode;
           if (p && p.nodeType === 1) { state.dirtyRoots.push(p); relevant = true; }
@@ -1188,6 +1211,8 @@
 
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg || !msg.type) return false;
+    if (msg.type === 'wpt:frame-cmd') { if (IS_CHILD) onFrameCmd(msg); return false; }
+    if (IS_CHILD && !(msg.type === 'wpt:state' && msg.child)) return false;   // 状态查询、开关等只由顶层页面应答（调试可指定子框架）
     switch (msg.type) {
       case NS.MSG.PING:
       case 'wpt:state':
@@ -1214,6 +1239,56 @@
     }
   });
 
+  /* ---------------- 子框架 ---------------- */
+  function notifyFrames(action) {
+    if (IS_CHILD) return;
+    try {
+      const p = chrome.runtime.sendMessage({ type: 'wpt:frames', action: action, overrides: state.overrides || null });
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    } catch (e) {}
+  }
+
+  /*
+   * 晚到的框架：Cookie 同意框等常在页面加载完之后才插入 iframe，开始翻译时还不存在。
+   * 顶层盯住每个 iframe 的 load：翻译进行中或已完成时，再让后台注入并通知一次（合并 400 ms 内的多次加载）；
+   * 已经翻过的框架收到后只做增量，不会重翻。
+   */
+  const seenFrames = new WeakSet();
+  let frameTimer = 0;
+  function watchFrames(root) {
+    if (IS_CHILD || !root) return;
+    const list = root.tagName === 'IFRAME' || root.tagName === 'FRAME' ? [root]
+      : (root.querySelectorAll ? root.querySelectorAll('iframe,frame') : []);
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      if (seenFrames.has(f)) continue;
+      seenFrames.add(f);
+      f.addEventListener('load', onFrameLoad);
+    }
+  }
+
+  function onFrameLoad() {
+    if (state.status !== NS.STATUS.TRANSLATING && state.status !== NS.STATUS.DONE) return;
+    clearTimeout(frameTimer);
+    frameTimer = setTimeout(function () { notifyFrames('start'); }, 400);
+  }
+
+  /* 太小（广告位、跟踪像素）或几乎没有文字的框架不值得翻译 */
+  function frameWorthTranslating() {
+    if (window.innerWidth < 200 || window.innerHeight < 60 || !document.body) return false;
+    return (document.body.innerText || '').trim().length >= 20;
+  }
+
+  function onFrameCmd(msg) {
+    if (msg.action === 'start') {
+      if (frameWorthTranslating()) start(msg.overrides || null).catch(function () {});
+    } else if (msg.action === 'restore') {
+      if (state.nodes.size || state.status !== NS.STATUS.IDLE) restore();
+    } else if (msg.action === 'stop') {
+      if (state.status === NS.STATUS.TRANSLATING || state.status === NS.STATUS.SCANNING) stopJob();
+    }
+  }
+
   NS.Content = {
     start: start,
     restore: restore,
@@ -1226,7 +1301,7 @@
 
   /* 自动翻译模式（动态注册内容脚本时） */
   NS.settings.get().then(async function (s) {
-    if (!NS.settings.autoAllowed(s, location.hostname)) return;
+    if (IS_CHILD || !NS.settings.autoAllowed(s, location.hostname)) return;
     // 整页已是目标语言（全站自动翻译时打开的中文网页）：不请求、不弹提示；手动翻译不受影响
     if (s.skipTargetLang && await pageIsTarget(s.targetLang)) return;
     start(null);

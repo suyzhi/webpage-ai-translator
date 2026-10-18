@@ -76,9 +76,12 @@ async function measureSite(cdp, ua, site) {
       if (!/^https?:/.test(f.url)) continue;
       try {
         const { executionContextId } = await cdp.send('Page.createIsolatedWorld', { frameId: f.id, worldName: 'wpt-eval' }, session);
-        const frameCovered = f.depth === 0 || EXT_ALL_FRAMES;
         const small = await evalCtx(cdp, session, executionContextId, 'innerWidth * innerHeight < 120 * 60 || !document.body');
         if (small) continue;
+        // 子框架与扩展的 frameWorthTranslating() 同一口径：太小或几乎没字的不翻
+        const worth = f.depth === 0 || await evalCtx(cdp, session, executionContextId,
+          'innerWidth >= 200 && innerHeight >= 60 && (document.body.innerText || "").trim().length >= 20');
+        const frameCovered = f.depth === 0 || (EXT_ALL_FRAMES && worth);
         await evalCtx(cdp, session, executionContextId, SOURCES + '\n;0');
         const r = await evalCtx(cdp, session, executionContextId,
           'WPT_EVAL.measure({ frameCovered: ' + frameCovered + ', runExtractor: ' + frameCovered + ', dumpTexts: ' + (f.depth === 0) + ' })');
