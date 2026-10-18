@@ -127,15 +127,17 @@
    */
   function plan(unit, onlyTranslation) {
     const el = unit.el;
+    const text = unit.text || '';
+    const short = text.indexOf('\n') < 0 && visualLength(text) <= SHORT_TEXT;
     if (unit.kind === 'partial') {
       const a = unit.anchorNode;
-      return { mode: a && a.parentNode === el ? 'anchor' : 'end', target: el, typo: null, only: !!onlyTranslation };
+      // 夹在块之间的一小段行内文字（标签、徽章）：译文紧跟在同一行，不单独占一行
+      return { mode: a && a.parentNode === el ? 'anchor' : 'end', target: el, typo: null, only: !!onlyTranslation,
+        inline: short && !onlyTranslation };
     }
     const cs = css(el);
     const parent = el.parentElement;
     const pcs = parent ? css(parent) : null;
-    const text = unit.text || '';
-    const short = text.indexOf('\n') < 0 && visualLength(text) <= SHORT_TEXT;
 
     // 横排导航 / 按钮 / 标签：行内追加，保持原有行高
     // 横向导航条里的短标签（下拉按钮、带图标的菜单项）：块级译文会错位成单独一行，一律行内；
@@ -143,6 +145,12 @@
     const nav = short && !onlyTranslation && inHorizontalNav(el);
     if (short && (nav || isRowFlow(pcs) || (cs && (cs.whiteSpace === 'nowrap' || /^inline/.test(cs.display || ''))))) {
       return { mode: 'inline', target: el, typo: null, only: !!onlyTranslation, nav: nav };
+    }
+    // 文字在一个行内块（按钮、下拉触发器、胶囊标签）里：译文跟在它右边，而不是掉到下一行
+    if (short && !onlyTranslation) {
+      const dom = dominantChild(el, text);
+      const dcs = dom ? css(dom) : null;
+      if (dcs && /^inline-(block|flex|grid)$/.test(dcs.display)) return { mode: 'inline', target: el, typo: null, only: false };
     }
     const src = typographySource(el);
     const inner = src !== el ? src : null;
@@ -224,7 +232,7 @@
    */
   function create(srcEl, text, settings, p) {
     const pl = p || { mode: 'sibling', target: srcEl, typo: srcEl };
-    const inline = pl.mode === 'inline';
+    const inline = pl.mode === 'inline' || !!pl.inline;
     const node = document.createElement(TAG);
     node.className = 'wpt-translation';
     node.setAttribute('data-wpt', '1');
@@ -254,6 +262,12 @@
       s.marginTop = 'calc(0.25em - ' + mb + ')';
       s.marginBottom = mb;
     }
+    if (pl.lines) {
+      s.display = '-webkit-box';
+      s.webkitBoxOrient = 'vertical';
+      s.webkitLineClamp = String(pl.lines);
+      s.overflow = 'hidden';
+    }
     applyMark(node, settings ? settings.markStyle : 'none', inline);
     node.textContent = text;
     return node;
@@ -278,11 +292,23 @@
       const parent = target.parentNode;
       if (!parent) return null;
       inheritSlot(node, target);
-      parent.insertBefore(node, target.nextSibling);
+      // 同一容器里多段都放到容器之后：排在已放过去的译文后面，保持阅读顺序
+      let ref = target.nextSibling;
+      if (pl.stack) while (ref && isOurs(ref)) ref = ref.nextSibling;
+      parent.insertBefore(node, ref);
       return 'sibling';
     }
+    // 追加进影子宿主：宿主的子节点只有分配到 slot 才显示，跟随最后一个子元素进同一个 slot
+    if (target.shadowRoot || (DOM_API && target.tagName.indexOf('-') > 0)) inheritSlot(node, lastLightChild(target));
     target.appendChild(node);
     return pl.mode === 'inline' ? 'inline' : 'end';
+  }
+
+  const DOM_API = globalThis.chrome && chrome.dom && typeof chrome.dom.openOrClosedShadowRoot === 'function'
+    ? chrome.dom.openOrClosedShadowRoot : null;
+  function lastLightChild(el) {
+    for (let c = el.lastElementChild; c; c = c.previousElementSibling) if (!isOurs(c)) return c;
+    return null;
   }
 
   /* 原文是投影进具名 slot 的宿主子元素时，译文必须进同一个 slot，否则不会显示 */
@@ -299,18 +325,55 @@
    * 原文本身也在范围之外的（可滚动侧栏里靠下的条目）只是需要滚动，不算。
    */
   function isClipped(node, src) {
+    return !!clipBox(node, src);
+  }
+
+  /* 同上，返回让译文放不下的那个定高祖先 */
+  function clipBox(node, src) {
     const r = node.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1 || !src || !src.getBoundingClientRect) return false;
+    if (r.width < 1 || r.height < 1 || !src || !src.getBoundingClientRect) return null;
     const sr = src.getBoundingClientRect();
     for (let a = composedParent(node), d = 0; a && d < 12; a = composedParent(a), d++) {
       if (a === document.body || a === document.documentElement) break;
       const cs = css(a);
       if (!cs || cs.display === 'contents' || /^inline/.test(cs.display)) continue;
       const ar = a.getBoundingClientRect();
-      if (sr.top >= ar.bottom - 2) return false;
-      if (r.bottom > ar.bottom + 2) return true;
+      if (sr.top >= ar.bottom - 2) return null;
+      if (r.bottom > ar.bottom + 2) return a;
     }
-    return false;
+    return null;
+  }
+
+  /*
+   * 长段落放不下（限高的摘要预览、line-clamp 卡片）：把译文放到定高容器之后，
+   * 并截成与原文露出部分相同的行数 —— 读者看到的是「原文预览 + 译文预览」，而不是没有译文。
+   * 只在容器像一块「预览」时这样做：不太高、文字不多、父元素按块排布（放进 flex/grid 行会多出一格）。
+   */
+  const PREVIEW_MAX_TEXT = 3000;
+  const INTERACTIVE_SEL = 'a,button,label,summary,[role="button"],[role="link"],[role="tab"],[role="menuitem"]';
+  function afterClipPlan(unit, box, allowShort) {
+    const el = unit.el;
+    const text = unit.text || '';
+    if (!allowShort && text.indexOf('\n') < 0 && visualLength(text) <= SHORT_TEXT) return null;     // 短标签先试行内
+    const parent = box && composedParent(box);
+    if (!parent || parent === document.documentElement || !el || !box.contains(el)) return null;
+    // 链接、按钮里的短文案搬到外面就脱离了原来的可点区域，宁可不显示
+    if (allowShort && (box.closest(INTERACTIVE_SEL) || el.closest(INTERACTIVE_SEL))) return null;
+    if (RIGID_PARENT.has(parent.tagName) || isRowFlow(css(parent)) || inHorizontalNav(box)) return null;
+    const br = box.getBoundingClientRect();
+    if (br.height > Math.max(240, (globalThis.innerHeight || 800) * 0.5)) return null;
+    if (visualLength(box.textContent) > PREVIEW_MAX_TEXT) return null;
+    const src = typographySource(el);
+    const bcs = css(box);
+    let lines = 0;
+    if (bcs && !(bcs.overflowY === 'visible' && bcs.overflowX === 'visible')) {
+      const scs = css(src);
+      const fs = scs ? parseFloat(scs.fontSize) || 16 : 16;
+      const lh = scs ? parseFloat(scs.lineHeight) || fs * 1.4 : fs * 1.4;
+      const shown = br.bottom - el.getBoundingClientRect().top;
+      lines = Math.max(2, Math.min(8, Math.round(shown / lh)));
+    }
+    return { mode: 'sibling', target: box, typo: src, only: false, stack: true, lines: lines };
   }
 
   function composedParent(n) {
@@ -415,6 +478,8 @@
     createLoader: createLoader,
     insertLoader: insertLoader,
     isClipped: isClipped,
+    clipBox: clipBox,
+    afterClipPlan: afterClipPlan,
     navMisfit: navMisfit,
     hideOriginal: hideOriginal,
     showOriginal: showOriginal,

@@ -42,6 +42,10 @@
     failedIds: new Set(),
     knownEls: new WeakSet(),
     total: 0, cached: 0,
+    dropped: 0,                 // 放不下而撤掉的译文数（评测用：撤得越多问题率越低，必须一起看）
+    dropLog: [],                // 撤掉的前若干条（原因、原文），调试用
+    titled: [],                 // [元素, 译文]：撤掉的译文改挂在悬停提示上，还原时摘掉
+    hScroll0: false, relayouts: 0, relayoutTimer: 0,   // 翻译前是否已有横向滚动；补发 resize 的次数
     error: null,
     seq: 0,
     port: null,
@@ -216,6 +220,7 @@
     }
     settings = Object.assign({}, settings, state.overrides || {});
     state.settings = settings;
+    if (!state.nodes.size) state.hScroll0 = hasHScroll();
     setStatus(NS.STATUS.SCANNING);
     ui.show('正在分析页面…', { kind: 'busy', duration: 0, sub: '提取可翻译段落' });
 
@@ -602,6 +607,7 @@
     }
     setStatus(NS.STATUS.DONE);
     stopHeartbeat();
+    scheduleRelayout();
     // 增量翻译（滚动加载、实时更新）静默完成，只有用户发起的翻译才提示
     if (!state.announce) return;
     state.announce = false;
@@ -698,7 +704,7 @@
         if (only && !j.u.hidden) j.u.hidden = R.hideOriginal(j.u, j.node);
         if (animate && j.u.visible) R.animate(j.node, Math.min(stagger++ * 45, 360));
         if (state.io && j.u.el) { try { state.io.unobserve(j.u.el); } catch (e) {} }
-        if (!only && (mode !== 'inline' || j.plan.nav)) state.clipCheck.push(j.node);
+        if (!only) state.clipCheck.push(j.node);
       }
     }
     discardOwnMutations();
@@ -715,6 +721,16 @@
   function scheduleClipCheck() {
     if (state.clipTimer || !state.clipCheck.length) return;
     state.clipTimer = document.hidden ? setTimeout(checkClipped, 50) : requestAnimationFrame(checkClipped);
+  }
+
+  /* 撤掉的译文不丢：挂到原文的悬停提示上（不占位置；原文或其外层已有提示的不覆盖） */
+  function noteDrop(u, why, text) {
+    state.dropped++;
+    if (state.dropLog.length < 40) state.dropLog.push(why + ': ' + String(u.text || '').slice(0, 40));
+    const el = u.el;
+    if (!el || !text || !el.closest || el.closest('[title]')) return;
+    el.setAttribute('title', text);
+    state.titled.push([el, text]);
   }
 
   function checkClipped() {
@@ -739,15 +755,25 @@
       }
       if (u.plan && u.plan.nav) {
         // 导航条里的行内译文放不下：直接撤掉，不再尝试别的位置
-        if (R.navMisfit(node, u.el)) drop.push([u, node]);
+        if (R.navMisfit(node, u.el)) drop.push([u, node, 'nav']);
         continue;
       }
-      if (u.plan && u.plan.mode === 'inline' && !u.clipFallback) continue;
-      if (R.isClipped(node, u.el)) fix.push([u, node]);
+      if (u.plan && u.plan.mode === 'inline' && !u.clipFallback) {
+        // 行内译文撑出定高标题 / 侧栏条目：标题类移到其后单独成行，链接按钮里的撤掉
+        const ibox = R.clipBox(node, u.el);
+        const p = ibox ? R.afterClipPlan(u, ibox, true) : null;
+        if (p) fix.push([u, node, p]);
+        else if (ibox) drop.push([u, node, 'inline']);
+        continue;
+      }
+      const box = R.clipBox(node, u.el);
+      // 长段落改行内也放不下：优先移到定高容器之后（同样在读阶段算好位置）
+      if (box) fix.push([u, node, u.clipFallback ? null : R.afterClipPlan(u, box)]);
     }
     for (let i = 0; i < drop.length; i++) {
       drop[i][1].remove();
       state.nodes.delete(drop[i][0].id);
+      noteDrop(drop[i][0], drop[i][2], drop[i][1].textContent);
     }
     for (let i = 0; i < fix.length; i++) {
       const u = fix[i][0];
@@ -756,9 +782,10 @@
       if (u.clipFallback) {
         // 改成行内后仍被截（容器太窄、换行后超出）：宁可不显示，也不留半截碎片
         state.nodes.delete(u.id);
+        noteDrop(u, 'fallback', node.textContent);
         continue;
       }
-      const plan = { mode: 'inline', target: u.el, typo: null, only: false };
+      const plan = fix[i][2] || { mode: 'inline', target: u.el, typo: null, only: false };
       const repl = R.create(u.el, node.textContent, state.settings, plan);
       if (!R.insert(repl, u, plan)) continue;
       u.plan = plan;
@@ -769,6 +796,29 @@
     }
     discardOwnMutations();
     scheduleClipCheck();
+    scheduleRelayout();
+  }
+
+  /*
+   * 页面脚本按加载时的高度排好的布局（瀑布流 / masonry：定高的纵向换行 flex），
+   * 加了译文之后内容变高、多出一列，整页出现横向滚动条。这类脚本都监听 resize：
+   * 翻译前没有横向滚动、翻译后出现了，就补发一次 resize 让页面自己重新排版。
+   * 流式翻译会分很多次落地：翻译中等安静 1 s 再发，完成时再查一次；每页最多 5 次。
+   */
+  function hasHScroll() {
+    const d = document.documentElement;
+    return !!d && d.scrollWidth > window.innerWidth + 1;
+  }
+
+  function scheduleRelayout() {
+    if (state.hScroll0 || state.relayouts >= 5) return;
+    clearTimeout(state.relayoutTimer);
+    const wait = state.status === NS.STATUS.TRANSLATING ? 1000 : 300;
+    state.relayoutTimer = setTimeout(function () {
+      if (!state.nodes.size || !hasHScroll()) return;
+      state.relayouts++;
+      try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+    }, wait);
   }
 
   /*
@@ -851,6 +901,11 @@
       if (u.hidden) { R.showOriginal(u.hidden); u.hidden = null; }
     });
     state.nodes.clear();
+    state.titled.forEach(function (x) { if (x[0].getAttribute('title') === x[1]) x[0].removeAttribute('title'); });
+    state.titled = [];
+    // 翻译时补发过 resize 的页面，译文撤掉后同样需要重新排版
+    clearTimeout(state.relayoutTimer);
+    if (state.relayouts) { state.relayouts = 0; try { window.dispatchEvent(new Event('resize')); } catch (e) {} }
     if (state.originalTitle != null) { try { document.title = state.originalTitle; } catch (e) {} }
     state.originalTitle = null;
     state.renderQueue.length = 0;
@@ -865,7 +920,7 @@
     state.failedIds.clear();
     state.knownEls = new WeakSet();
     state.churn = new WeakMap();
-    state.total = 0; state.cached = 0; state.lastStats = null;
+    state.total = 0; state.cached = 0; state.dropped = 0; state.dropLog = []; state.lastStats = null;
     state.error = null;
     state.reconnectTries = 0;
     state.overrides = null;
@@ -1104,6 +1159,7 @@
       done: state.total - state.pending.size,
       failed: state.failedIds.size,
       cached: state.cached,
+      dropped: state.dropped,
       translated: state.nodes.size,
       targetLang: state.settings ? state.settings.targetLang : null,
       displayMode: state.settings ? state.settings.displayMode : null,
@@ -1117,7 +1173,7 @@
     switch (msg.type) {
       case NS.MSG.PING:
       case 'wpt:state':
-        sendResponse(report());
+        sendResponse(msg.debug ? Object.assign(report(), { dropLog: state.dropLog }) : report());
         return false;
       case NS.MSG.TOGGLE:
         toggle();
@@ -1151,7 +1207,17 @@
   };
 
   /* 自动翻译模式（动态注册内容脚本时） */
-  NS.settings.get().then(function (s) {
-    if (NS.settings.autoAllowed(s, location.hostname)) start(null);
+  NS.settings.get().then(async function (s) {
+    if (!NS.settings.autoAllowed(s, location.hostname)) return;
+    // 整页已是目标语言（全站自动翻译时打开的中文网页）：不请求、不弹提示；手动翻译不受影响
+    if (s.skipTargetLang && await pageIsTarget(s.targetLang)) return;
+    start(null);
   }).catch(function () {});
+
+  async function pageIsTarget(targetLang) {
+    const sample = U.normalizeText((document.body && document.body.innerText || '').slice(0, 3000));
+    if (sample.length < 40) return false;
+    if (chrome.i18n && typeof chrome.i18n.detectLanguage === 'function') return detectIsTarget(sample, U.baseLang(targetLang));
+    return U.isProbablyTargetLang(sample, targetLang);
+  }
 })();

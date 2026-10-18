@@ -104,6 +104,17 @@ async function main() {
     await cdp.send('Target.createTarget', { url: MOCK + '/demo/test-page.html?on' });
     const auto = await waitFor('名单内网站自动翻译', async () => { const s = await stateAt(MOCK + '/demo/test-page.html?on'); return s && s.status === 'done' ? s : null; }, 30000, 400).catch(() => null);
     check('按网站自动翻译：名单内的网站打开即翻译', auto && auto.translated > 0, auto ? 'translated=' + auto.translated : 'not translated');
+    // 整页已是目标语言：自动翻译不请求、不弹提示
+    const reqBefore = (await (await fetch(MOCK + '/__stats')).json()).requests;
+    const zh = await cdp.send('Target.createTarget', { url: MOCK + '/demo/zh-page.html' });
+    await delay(2500);
+    const zhState = await stateAt(MOCK + '/demo/zh-page.html');
+    const reqAfter = (await (await fetch(MOCK + '/__stats')).json()).requests;
+    const zhS = (await cdp.send('Target.attachToTarget', { targetId: zh.targetId, flatten: true })).sessionId;
+    await cdp.send('Runtime.enable', {}, zhS);
+    const zhUi = await cdp.evalIn(zhS, '!!document.querySelector("wpt-ui")');
+    check('自动翻译：中文页面不发请求、不弹提示', zhState && zhState.status === 'idle' && reqAfter === reqBefore && !zhUi,
+      JSON.stringify({ status: zhState && zhState.status, requests: reqAfter - reqBefore, ui: zhUi }));
   } catch (err) {
     check('端到端流程抛出异常', false, err && err.message);
     if (browser && browser.stderr.length) console.error(browser.stderr.join('').slice(-1500));

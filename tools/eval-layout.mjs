@@ -9,7 +9,7 @@
  *   - 提示停留：翻译完成后右下角提示还停留多久
  * 每站保存一张翻译后的首屏截图到 .cache/eval/shots/，供人工过目。
  *
- * 用法：node tools/eval-layout.mjs [--only a,b] [--label 名称]
+ * 用法：node tools/eval-layout.mjs [--only a,b] [--label 名称] [--inspect 表达式文件.js]
  *       DEEPSEEK_API_KEY=… node tools/eval-layout.mjs --real --only wikipedia,mdn   # 真实 DeepSeek 译文（流式），截图存 shots-real/
  */
 import fs from 'node:fs';
@@ -27,6 +27,7 @@ const LABEL = arg('label', new Date().toISOString().replace(/[:.]/g, '-').slice(
 const OUT_DIR = path.join(ROOT, '.cache', 'eval');
 const REAL = argv.includes('--real');
 const SHOTS = path.join(OUT_DIR, REAL ? 'shots-real' : 'shots');
+const INSPECT = arg('inspect', '') ? fs.readFileSync(arg('inspect'), 'utf8') : '';   // 调试：翻译后在页面里执行的表达式文件
 const SITE_TIMEOUT = 75000;
 const GLOBAL_DEADLINE = Date.now() + 14 * 60000;
 const log = (...a) => console.log('[layout]', ...a);
@@ -109,6 +110,18 @@ const PROBE = `(function () {
         chain: chain.join(' < '), nav: nav ? desc(nav) + ' h=' + Math.round(nav.getBoundingClientRect().height) : null });
     }
   }
+  // 出现横向滚动时，找出越过右边界的最内层元素，便于定位是哪段译文撑宽了页面
+  if (res.hScroll) {
+    res.wide = [];
+    for (const el of document.body.querySelectorAll('*')) {
+      const r = el.getBoundingClientRect();
+      if (r.right <= W + 1 || r.width < 1) continue;
+      let inner = false;
+      for (const c of el.children) { const q = c.getBoundingClientRect(); if (q.right > W + 1 && q.width >= 1) { inner = true; break; } }
+      if (!inner) res.wide.push(desc(el) + ' right=' + Math.round(r.right) + ' ' + (el.textContent || '').trim().slice(0, 30));
+      if (res.wide.length >= 6) break;
+    }
+  }
   return res;
 })()`;
 
@@ -155,7 +168,7 @@ async function main() {
           const before = await cdp.evalIn(s, '({ hScroll: document.documentElement.scrollWidth > innerWidth + 1, href: location.href })');
           const tab = await cdp.evalIn(optS, '(async () => { const tabs = await chrome.tabs.query({}); const t = tabs.find((x) => x.url === ' + JSON.stringify(before.href) + '); if (!t) return null; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: t.id, toggle: true }); return { id: t.id, ok: r && r.ok }; })()');
           if (!tab || !tab.ok) throw new Error('注入失败');
-          const stateExpr = '(async () => { try { return await chrome.tabs.sendMessage(' + tab.id + ', { type: "wpt:state" }); } catch (e) { return null; } })()';
+          const stateExpr = '(async () => { try { return await chrome.tabs.sendMessage(' + tab.id + ', { type: "wpt:state", debug: true }); } catch (e) { return null; } })()';
           const st = await waitFor('翻译完成', async () => {
             const x = await cdp.evalIn(optS, stateExpr);
             return x && (x.status === 'done' || x.status === 'error' || x.status === 'idle') ? x : null;
@@ -163,6 +176,7 @@ async function main() {
           const doneAt = Date.now();
           await delay(1300);                                 // 等入场动画（380ms + 错峰最多 360ms）与随后的裁切兜底
           const probe = await cdp.evalIn(s, PROBE);
+          if (INSPECT) log(site.id + ' inspect: ' + JSON.stringify(await cdp.evalIn(s, INSPECT), null, 1));
           const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }, s);
           fs.writeFileSync(path.join(SHOTS, site.id + '.jpg'), Buffer.from(shot.data, 'base64'));
           let toastMs = null;                                // 完成提示停留：从状态变为 done 到提示消失
@@ -171,11 +185,14 @@ async function main() {
             if (!shown) { toastMs = Date.now() - doneAt; break; }
             await delay(200);
           }
-          return { status: st.status, total: st.total, translated: st.translated, failed: st.failed, newHScroll: !before.hScroll && probe.hScroll, toastMs, ...probe };
+          const fin = await cdp.evalIn(optS, stateExpr);     // 撤掉的译文数在裁切兜底之后才定下来
+          // 横向滚动只算「持续存在」的：提示消失后（约 3 s）仍在才计。页面脚本重排（如瀑布流）本身有延迟
+          const hScrollLate = await cdp.evalIn(s, 'document.documentElement.scrollWidth > innerWidth + 1');
+          return { status: st.status, total: st.total, translated: st.translated, failed: st.failed, dropped: (fin && fin.dropped) || 0, dropLog: (fin && fin.dropLog) || [], newHScroll: !before.hScroll && probe.hScroll && hScrollLate, hScrollTransient: !before.hScroll && probe.hScroll && !hScrollLate, toastMs, ...probe };
         })(), delay(SITE_TIMEOUT).then(() => { throw new Error('站点超时'); })]);
         const bad = r.clipped + r.occluded + r.overflow;
         out.push({ id: site.id, cat: site.cat, ...r, badRate: r.inView ? Math.round(1000 * bad / r.inView) / 10 : null });
-        log(site.id.padEnd(14) + ' 首屏译文 ' + String(r.inView).padStart(3) + '  裁切 ' + r.clipped + '  遮挡 ' + r.occluded + '  溢出 ' + r.overflow +
+        log(site.id.padEnd(14) + ' 首屏译文 ' + String(r.inView).padStart(3) + '  裁切 ' + r.clipped + '  遮挡 ' + r.occluded + '  溢出 ' + r.overflow + '  撤掉 ' + r.dropped + '  不可见 ' + r.empty +
           (r.newHScroll ? '  新增横向滚动!' : '') + '  提示停留 ' + (r.toastMs == null ? '>8s' : r.toastMs + 'ms') + '  ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
       } catch (e) {
         out.push({ id: site.id, cat: site.cat, error: String(e.message || e) });
@@ -198,7 +215,7 @@ async function main() {
   const toasts = ok.map((r) => r.toastMs).filter((x) => x != null).sort((a, b) => a - b);
   const summary = {
     label: LABEL, sites: out.length, valid: ok.length,
-    inView: sum('inView'), clipped: sum('clipped'), occluded: sum('occluded'), overflow: sum('overflow'),
+    inView: sum('inView'), clipped: sum('clipped'), occluded: sum('occluded'), overflow: sum('overflow'), dropped: sum('dropped'), empty: sum('empty'),
     badRate: Math.round(1000 * (sum('clipped') + sum('occluded') + sum('overflow')) / Math.max(1, sum('inView'))) / 10,
     sitesWithIssues: ok.filter((r) => r.clipped + r.occluded + r.overflow > 0).map((r) => r.id + '(' + (r.clipped + r.occluded + r.overflow) + ')'),
     newHScroll: ok.filter((r) => r.newHScroll).map((r) => r.id),

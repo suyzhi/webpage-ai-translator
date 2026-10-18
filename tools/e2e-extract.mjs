@@ -121,7 +121,13 @@ async function main() {
       + '<a href="#c" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Skip to main content</a>'
       + '<button><span style="position:absolute;clip:rect(1px,1px,1px,1px);width:1px;height:1px;overflow:hidden">Main menu</span>☰</button>'
       + '<span style="position:absolute;clip-path:inset(50%)">Screen reader only label</span>'
-      + '<div style="position:absolute;left:0;top:0;width:300px">Absolutely positioned but visible caption text.</div>';
+      + '<div style="position:absolute;left:0;top:0;width:300px">Absolutely positioned but visible caption text.</div>'
+      + '<p>Docs prose: close tags like <code>&lt;br /&gt;</code> and wrap siblings in <code>&lt;div&gt;</code>, <code>&lt;/div&gt;</code> or a <code>&lt;slot&gt;</code>.</p>'
+      + '<div>&lt;div class="row"&gt;&lt;span&gt;Serialized markup&lt;/span&gt;&lt;/div&gt;</div>'
+      + '<p>Collapsed source newline,\n\nstill one visual line.</p>'
+      + '<p style="white-space:pre-line">Kept newline first line\nsecond line.</p>'
+      + '<div class="highlight highlight-source-js"><div>const answer = computeTheValue(input);</div></div>'
+      + '<ul><li class="community-highlight-card"><h2>Monthly current events megathread for readers</h2></li></ul>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -138,7 +144,13 @@ async function main() {
       ' hasMathjaxMarker: texts.some(function(t){ return t.indexOf("lowercase mathjax marker") >= 0; }),' +
       ' hasMathDisplay: texts.some(function(t){ return t.indexOf("display math block") >= 0; }),' +
       ' hasSrOnly: texts.some(function(t){ return /Skip to main|Main menu|Screen reader only/.test(t); }),' +
-      ' hasAbsCaption: texts.some(function(t){ return t.indexOf("Absolutely positioned but visible") >= 0; }) }; })()');
+      ' hasAbsCaption: texts.some(function(t){ return t.indexOf("Absolutely positioned but visible") >= 0; }),' +
+      ' hasDocsProse: texts.some(function(t){ return t.indexOf("Docs prose") >= 0; }),' +
+      ' hasSerialized: texts.some(function(t){ return t.indexOf("Serialized markup") >= 0; }),' +
+      ' collapsedNl: texts.filter(function(t){ return t.indexOf("Collapsed source newline") >= 0; })[0],' +
+      ' keptNl: texts.filter(function(t){ return t.indexOf("Kept newline") >= 0; })[0],' +
+      ' hasHlCode: texts.some(function(t){ return t.indexOf("computeTheValue") >= 0; }),' +
+      ' hasHlCard: texts.some(function(t){ return t.indexOf("Monthly current events") >= 0; }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
     check('translate=no / .notranslate 被跳过', !edge.hasSkipped);
@@ -151,6 +163,11 @@ async function main() {
     check('MathJax_Display 公式块被跳过', !edge.hasMathDisplay);
     check('仅屏幕阅读器可见的文字（clip / clip-path / 1px）被跳过', !edge.hasSrOnly, JSON.stringify(edge.texts));
     check('普通的绝对定位文字照常抽取', edge.hasAbsCaption);
+    check('讲解 HTML 标签的正文（标签写在 <code> 里）照常抽取', edge.hasDocsProse, JSON.stringify(edge.texts));
+    check('裸露的序列化 HTML 仍被跳过', !edge.hasSerialized);
+    check('代码高亮容器（.highlight）被跳过，类名里只是含 highlight 的正文卡片照常抽取', !edge.hasHlCode && edge.hasHlCard, JSON.stringify(edge.texts));
+    check('源码换行在 white-space:normal 下按空格处理，pre-line 下保留', edge.collapsedNl === 'Collapsed source newline, still one visual line.' &&
+      edge.keptNl === 'Kept newline first line\nsecond line.', JSON.stringify([edge.collapsedNl, edge.keptNl]));
 
     // 4) Shadow DOM：open 影子根、嵌套影子根、具名 slot 投影的宿主子元素
     const shadow = await cdp.evalIn(session, HEAD +

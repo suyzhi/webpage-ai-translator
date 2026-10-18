@@ -24,7 +24,9 @@
   /* 这些行内元素不单独成单元，但其文本会并入所属块，避免句子被截断 */
   const INLINE_SOFT_SKIP = new Set(['CODE', 'KBD', 'SAMP', 'VAR', 'CITE', 'ABBR']);
 
-  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|highlight|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|mwe-math-element|blob-code|linenumber)([-_\s]|$)/i;
+  // 代码高亮的 highlight 只认完整类名（Pygments / Rouge / GitHub 的 highlight、highlight-source-*），
+  // 不能按片段匹配：Reddit 的 community-highlight-card（精选帖卡片）是正文
+  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|mwe-math-element|blob-code|linenumber)([-_\s]|$)|(^|\s)(highlight|highlight-source-[\w-]+|highlighter-rouge)(\s|$)/i;
   // MathJax 渲染产物的类名区分大小写（MathJax / MathJax_Display）；小写的 "mathjax" 只是「本块含公式、待渲染」的标记，
   // 例如 arXiv 摘要 <blockquote class="abstract mathjax">，不能整块跳过
   const MATHJAX_CLASS_RE = /(^|\s)MathJax(_\w+)?(\s|$)/;
@@ -159,13 +161,26 @@
     return node.childNodes;
   }
 
+  /*
+   * 源码里的换行只有在 white-space 保留换行（pre / pre-wrap / pre-line）时才显示；
+   * 默认的 normal 下它只是排版用的空白，当成空格，否则译文（pre-wrap）会凭空多出空行。
+   */
+  function textValue(t) {
+    const v = t.nodeValue;
+    if (v.indexOf('\n') < 0) return v;
+    const p = t.parentElement;
+    let ws = 'normal';
+    try { ws = p ? getComputedStyle(p).whiteSpace : 'normal'; } catch (e) { /* 忽略 */ }
+    return ws === 'normal' || ws === 'nowrap' ? v.replace(/\n/g, ' ') : v;
+  }
+
   function collectText(node, out, depth, slots, lightOnly) {
     let prev = null;
     const kids = childList(node, slots, lightOnly);
     for (let i = 0; i < kids.length; i++) {
       const n = kids[i];
       if (n.nodeType === 3) {
-        if (n.nodeValue) { out.push(n.nodeValue); prev = n; }
+        if (n.nodeValue) { out.push(textValue(n)); prev = n; }
         continue;
       }
       if (n.nodeType !== 1) continue;
@@ -189,7 +204,7 @@
     let prev = null;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      if (n.nodeType === 3) { if (n.nodeValue) out.push(n.nodeValue); }
+      if (n.nodeType === 3) { if (n.nodeValue) out.push(textValue(n)); }
       else if (n.tagName === 'BR') out.push('\n');
       else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
       prev = n;
@@ -260,13 +275,24 @@
   const HTML_LIKE_RE = /<\/?[a-z][a-z0-9-]*[\s>\/]/i;
   const HTML_TAG_RE = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi;
 
+  function tagCount(s) {
+    return (s.match(HTML_TAG_RE) || []).length;
+  }
+  function codeTagCount(el) {
+    let n = 0;
+    const list = el && el.querySelectorAll ? el.querySelectorAll('code,kbd,samp,tt,var') : [];
+    for (let i = 0; i < list.length && i < 50; i++) n += tagCount(list[i].textContent || '');
+    return n;
+  }
+
   function pushUnit(ctx, el, text, kind, anchorNode, nodes) {
     if (ctx.units.length >= MAX_UNITS) return;
     const norm = U.normalizeText(text);
     if (!U.isTranslatable(norm, ctx.settings, true)) return;
     if (kind === 'full' && isShortControl(el, norm)) return;
     // 兜底：看起来是序列化的 HTML（虚拟列表占位、隐藏的无障碍副本）绝不送去翻译
-    if (HTML_LIKE_RE.test(norm) && (norm.match(HTML_TAG_RE) || []).length >= 3) return;
+    // 写在 <code> 里的标签是文档在讲解 HTML（MDN、React 文档），不算
+    if (HTML_LIKE_RE.test(norm) && tagCount(norm) - codeTagCount(el) >= 3) return;
     ctx.seq++;
     ctx.units.push({
       id: ctx.seq,

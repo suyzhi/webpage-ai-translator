@@ -81,7 +81,27 @@ async function main() {
       // 定高但 overflow 可见：块级译文会溢出压住下一段
       ' const spill = document.createElement("section"); spill.id = "e2e-spill";' +
       ' spill.innerHTML = \'<div style="height:28px;line-height:24px"><p style="margin:0">Important update for readers</p></div><p id="e2e-next" style="margin:0">Following paragraph stays readable.</p>\';' +
-      ' document.body.insertBefore(spill, document.body.firstChild); return true; })()');
+      ' document.body.insertBefore(spill, document.body.firstChild);' +
+      // 限高的长段落预览（Reddit 信息流摘要式）：译文应放到预览框之后，截成与原文露出部分相同的行数
+      ' const clamp = document.createElement("section"); clamp.id = "e2e-clamp"; clamp.style.width = "320px";' +
+      ' clamp.innerHTML = \'<div class="pv" style="max-height:48px;line-height:24px;overflow:hidden"><p style="margin:0">The city council approved a new transit plan on Tuesday that would add three bus lines, extend late-night service and lower fares for students and seniors starting next spring.</p></div><p id="e2e-clamp-next" style="margin:0">Read more</p>\';' +
+      ' document.body.insertBefore(clamp, document.body.firstChild);' +
+      // 影子宿主只有具名 slot（Reddit shreddit-post-text-body 式）：追加进宿主的译文必须进同一个 slot 才显示
+      ' const host = document.createElement("x-e2e-body"); host.id = "e2e-host"; host.style.display = "block";' +
+      ' host.attachShadow({ mode: "open" }).innerHTML = \'<div><slot name="body"></slot></div>\';' +
+      ' host.innerHTML = \'<span slot="body">Scientists say the migrating insects can travel hundreds of kilometres without any harm.</span>\';' +
+      ' document.body.insertBefore(host, document.body.firstChild);' +
+      // 块之间的一小段文字（徽章）与行内块里的短标签（下拉按钮）：译文应在同一行
+      ' const mix = document.createElement("div"); mix.id = "e2e-mix";' +
+      ' mix.innerHTML = \'<div id="e2e-flair">Biology<p style="margin:0">A longer paragraph sits in the same container right below the badge.</p></div>\' +' +
+      '   \'<div id="e2e-sort"><span style="display:inline-flex;padding:2px 8px;border:1px solid #888">This Year</span></div>\';' +
+      ' document.body.insertBefore(mix, document.body.firstChild);' +
+      // 瀑布流（Microsoft Learn 式）：页面脚本按内容算出定高的纵向换行 flex，只在 resize 时重算
+      ' const mas = document.createElement("div"); mas.id = "e2e-masonry"; mas.style.cssText = "display:flex;flex-direction:column;flex-wrap:wrap;width:100%";' +
+      ' mas.innerHTML = [1,2,3,4,5,6].map(function(i){ return \'<div style="width:33%;box-sizing:border-box;padding:4px"><p style="margin:0">Masonry card number \' + i + \' explains one topic in a single sentence.</p></div>\'; }).join("");' +
+      ' document.body.insertBefore(mas, document.body.firstChild);' +
+      ' function lay(){ let sum = 0; for (const k of mas.children) sum += k.offsetHeight; mas.style.height = Math.ceil(sum / 3 + 8) + "px"; }' +
+      ' lay(); window.addEventListener("resize", lay); return true; })()');
 
     const trigger = await cdp.evalIn(optSession, '(async () => { const tabs = await chrome.tabs.query({ url: "' + MOCK + '/*" }); if (!tabs.length) return { error: "no tab" }; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: tabs[0].id, toggle: true }); return { tabId: tabs[0].id, r }; })()');
     check('内容脚本注入', trigger && trigger.r && trigger.r.ok, JSON.stringify(trigger));
@@ -116,6 +136,21 @@ async function main() {
       ' const next = document.getElementById("e2e-next").getBoundingClientRect(); if (!t) return { t: false };' +
       ' const r = t.getBoundingClientRect(); return { t: true, display: t.style.display, overlaps: r.bottom > next.top + 1 && r.top < next.bottom }; })()');
     check('定高容器（overflow 可见）：译文不溢出压住下一段', !spill.t || (spill.display === 'inline' && !spill.overlaps), JSON.stringify(spill));
+    const clamp = await cdp.evalIn(pageSession, '(function(){ const box = document.querySelector("#e2e-clamp .pv"); const t = box.nextElementSibling;' +
+      ' if (!t || !t.classList.contains("wpt-translation")) return { after: false, inside: box.querySelectorAll(".wpt-translation").length };' +
+      ' const r = t.getBoundingClientRect(), next = document.getElementById("e2e-clamp-next").getBoundingClientRect();' +
+      ' return { after: true, lines: t.style.webkitLineClamp, h: Math.round(r.height), overlaps: r.bottom > next.top + 1, cjk: /[\\u4e00-\\u9fff]/.test(t.textContent) }; })()');
+    check('限高的长段落预览：译文放到预览框之后、截成同样行数、不压住下文', clamp.after && clamp.lines === '2' && clamp.h <= 60 && !clamp.overlaps && clamp.cjk, JSON.stringify(clamp));
+    const mas = await cdp.evalIn(pageSession, '({ sw: document.documentElement.scrollWidth, w: innerWidth, n: document.querySelectorAll("#e2e-masonry .wpt-translation").length })');
+    check('瀑布流：译文撑高后补发 resize，页面重新排版、不出现横向滚动', mas.n === 6 && mas.sw <= mas.w + 1, JSON.stringify(mas));
+    const slotted = await cdp.evalIn(pageSession, '(function(){ const t = document.querySelector("#e2e-host > .wpt-translation"); if (!t) return { t: false };' +
+      ' const r = t.getBoundingClientRect(); return { t: true, slot: t.getAttribute("slot"), visible: r.width > 0 && r.height > 0 }; })()');
+    check('影子宿主里追加的译文进入同一个具名 slot 并可见', slotted.t && slotted.slot === 'body' && slotted.visible, JSON.stringify(slotted));
+    const sameLine = await cdp.evalIn(pageSession, '(function(){ function chk(sel, srcSel){ const box = document.querySelector(sel); const t = box && box.querySelector(".wpt-translation"); if (!t) return "none";' +
+      ' const rg = document.createRange(); const src = srcSel ? box.querySelector(srcSel) : box.firstChild; rg.selectNodeContents(src); const s = rg.getClientRects()[0]; const r = t.getClientRects()[0];' +
+      ' return t.style.display + (Math.abs(r.top - s.top) < s.height ? ":same-line" : ":below"); }' +
+      ' return { flair: chk("#e2e-flair"), sort: chk("#e2e-sort", "span") }; })()');
+    check('块之间的短文字、行内块里的短标签：译文在同一行', sameLine.flair === 'inline:same-line' && sameLine.sort === 'inline:same-line', JSON.stringify(sameLine));
     check('横向导航：短标签译文行内同一行，放不下的撤掉', menu[0] === 'inline:same-line' && menu[1] === 'inline:same-line' && menu[2] === 'none', JSON.stringify(menu));
 
     const stats = await httpJson(MOCK + '/__stats');
@@ -125,10 +160,14 @@ async function main() {
     check('请求段数不超过单元数（相同文本去重生效）', stats.segments <= state.total, 'segments=' + stats.segments + ' total=' + state.total);
     check('请求段数覆盖全部译文节点', stats.segments >= dom.count, 'segments=' + stats.segments + ' rendered=' + dom.count);
 
+    const titles = await cdp.evalIn(pageSession, '(function(){ const p = document.querySelector("#e2e-narrow p"); const s = document.querySelectorAll("#e2e-menu li span")[2]; return [p.title, s.title]; })()');
+    check('撤掉的译文改挂在悬停提示上', titles.every(function (t) { return /[\u4e00-\u9fff]/.test(t); }), JSON.stringify(titles));
     await cdp.evalIn(optSession, '(async () => { const tabs = await chrome.tabs.query({ url: "' + MOCK + '/*" }); await chrome.tabs.sendMessage(tabs[0].id, { type: "wpt:restore" }); return true; })()');
     await sleep(400);
     const afterRestore = await cdp.evalIn(pageSession, 'document.querySelectorAll(".wpt-translation").length');
     check('还原原文后译文清空', afterRestore === 0, 'left=' + afterRestore);
+    const titlesLeft = await cdp.evalIn(pageSession, 'document.querySelectorAll("#e2e-narrow [title], #e2e-menu [title]").length');
+    check('还原后悬停提示一并摘掉', titlesLeft === 0, 'left=' + titlesLeft);
 
     log('统计：' + JSON.stringify({ requests: stats.requests, segments: stats.segments, batches: stats.batches }));
   } catch (err) {
