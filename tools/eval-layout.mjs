@@ -189,11 +189,11 @@ async function main() {
           // 横向滚动只算「持续存在」的：提示消失后（约 3 s）仍在才计。页面脚本重排（如瀑布流）本身有延迟
           const hScrollLate = await cdp.evalIn(s, 'document.documentElement.scrollWidth > innerWidth + 1');
           if (st.error) log(site.id + " 错误：" + st.error);
-          return { status: st.status, error: st.error || null, total: st.total, translated: st.translated, failed: st.failed, dropped: (fin && fin.dropped) || 0, dropLog: (fin && fin.dropLog) || [], newHScroll: !before.hScroll && probe.hScroll && hScrollLate, hScrollTransient: !before.hScroll && probe.hScroll && !hScrollLate, toastMs, ...probe };
+          return { status: st.status, error: st.error || null, total: st.total, translated: st.translated, failed: st.failed, dropped: (fin && fin.dropped) || 0, dropLog: (fin && fin.dropLog) || [], perf: (fin && fin.perf) || null, newHScroll: !before.hScroll && probe.hScroll && hScrollLate, hScrollTransient: !before.hScroll && probe.hScroll && !hScrollLate, toastMs, ...probe };
         })(), delay(SITE_TIMEOUT).then(() => { throw new Error('站点超时'); })]);
         const bad = r.clipped + r.occluded + r.overflow;
         out.push({ id: site.id, cat: site.cat, ...r, badRate: r.inView ? Math.round(1000 * bad / r.inView) / 10 : null });
-        log(site.id.padEnd(14) + ' 首屏译文 ' + String(r.inView).padStart(3) + '  裁切 ' + r.clipped + '  遮挡 ' + r.occluded + '  溢出 ' + r.overflow + '  撤掉 ' + r.dropped + '  不可见 ' + r.empty +
+        log(site.id.padEnd(14) + ' 首屏译文 ' + String(r.inView).padStart(3) + '  裁切 ' + r.clipped + '  遮挡 ' + r.occluded + '  溢出 ' + r.overflow + '  撤掉 ' + r.dropped + '  不可见 ' + r.empty + (r.perf ? '  主线程最长 ' + Math.max(r.perf.renderMax, r.perf.clipMax, r.perf.collectMax) + 'ms' : '') +
           (r.newHScroll ? '  新增横向滚动!' : '') + '  提示停留 ' + (r.toastMs == null ? '>8s' : r.toastMs + 'ms') + '  ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
       } catch (e) {
         out.push({ id: site.id, cat: site.cat, error: String(e.message || e) });
@@ -220,7 +220,11 @@ async function main() {
     badRate: Math.round(1000 * (sum('clipped') + sum('occluded') + sum('overflow')) / Math.max(1, sum('inView'))) / 10,
     sitesWithIssues: ok.filter((r) => r.clipped + r.occluded + r.overflow > 0).map((r) => r.id + '(' + (r.clipped + r.occluded + r.overflow) + ')'),
     newHScroll: ok.filter((r) => r.newHScroll).map((r) => r.id),
-    toastMedianMs: toasts.length ? toasts[toasts.length >> 1] : null
+    toastMedianMs: toasts.length ? toasts[toasts.length >> 1] : null,
+    // 插件自身的主线程耗时：渲染 / 裁切复查 / 抽取的单次最大值，与超过 50 ms 的长任务次数
+    perfMaxMs: Math.max(0, ...ok.filter((r) => r.perf).map((r) => Math.max(r.perf.renderMax, r.perf.clipMax, r.perf.collectMax))),
+    longTasks: ok.reduce((n, r) => n + (r.perf ? r.perf.longTasks : 0), 0),
+    longTaskSites: ok.filter((r) => r.perf && r.perf.longTasks).map((r) => r.id + '(' + JSON.stringify(r.perf) + ')')
   };
   fs.writeFileSync(path.join(OUT_DIR, 'layout-' + LABEL + '.json'), JSON.stringify({ summary, sites: out }, null, 1));
   console.log('\n汇总：' + JSON.stringify(summary, null, 1));

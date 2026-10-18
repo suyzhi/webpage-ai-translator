@@ -232,7 +232,7 @@
 
     let units;
     try {
-      units = NS.Extractor.collect(document.body, NS.settings.forContent(settings));
+      units = timed('collectMax', NS.Extractor.collect)(document.body, NS.settings.forContent(settings));
     } catch (e) {
       return fail('页面解析失败：' + ((e && e.message) || e));
     }
@@ -652,7 +652,24 @@
     else state.rafId = requestAnimationFrame(flushRender);
   }
 
-  function flushRender() {
+  /*
+   * 主线程耗时记录（评测用，随 debug 状态上报）：渲染、裁切复查、抽取各自的单次最大值，
+   * 以及超过 50 ms（长任务阈值，会让页面卡一下）的次数。
+   */
+  const perf = { renderMax: 0, clipMax: 0, collectMax: 0, longTasks: 0 };
+  function timed(key, fn) {
+    return function () {
+      const t = performance.now();
+      try { return fn.apply(this, arguments); } finally {
+        const d = performance.now() - t;
+        if (d > perf[key]) perf[key] = Math.round(d * 10) / 10;
+        if (d > 50) perf.longTasks++;
+      }
+    };
+  }
+
+  const flushRender = timed('renderMax', flushRenderNow);
+  function flushRenderNow() {
     state.rafId = 0;
     state.timerId = 0;
     if (!state.renderQueue.length || !state.settings) return;
@@ -733,7 +750,8 @@
     state.titled.push([el, text]);
   }
 
-  function checkClipped() {
+  const checkClipped = timed('clipMax', checkClippedNow);
+  function checkClippedNow() {
     state.clipTimer = 0;
     const list = state.clipCheck;
     state.clipCheck = [];
@@ -1109,7 +1127,7 @@
       if (!NS.Extractor.isRendered(node)) continue;      // 位于隐藏占位（虚拟列表离屏项）内部
       seen.add(node);
       let units;
-      try { units = NS.Extractor.collect(node, cfg); } catch (e) { continue; }
+      try { units = timed('collectMax', NS.Extractor.collect)(node, cfg); } catch (e) { continue; }
       observeShadows(units.shadowRoots);
       let invalidated = false;
       const mark = found.length;
@@ -1173,7 +1191,7 @@
     switch (msg.type) {
       case NS.MSG.PING:
       case 'wpt:state':
-        sendResponse(msg.debug ? Object.assign(report(), { dropLog: state.dropLog }) : report());
+        sendResponse(msg.debug ? Object.assign(report(), { dropLog: state.dropLog, perf: perf }) : report());
         return false;
       case NS.MSG.TOGGLE:
         toggle();
