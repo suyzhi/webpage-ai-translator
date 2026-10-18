@@ -127,7 +127,9 @@ async function main() {
       + '<p>Collapsed source newline,\n\nstill one visual line.</p>'
       + '<p style="white-space:pre-line">Kept newline first line\nsecond line.</p>'
       + '<div class="highlight highlight-source-js"><div>const answer = computeTheValue(input);</div></div>'
-      + '<ul><li class="community-highlight-card"><h2>Monthly current events megathread for readers</h2></li></ul>';
+      + '<ul><li class="community-highlight-card"><h2>Monthly current events megathread for readers</h2></li></ul>'
+      + '<p>Use the operators <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="notranslate">-</code> and <span translate="no">*</span> for arithmetic.</p>'
+      + '<p><span class="notranslate">BrandOnlyName Widget</span></p>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -150,7 +152,9 @@ async function main() {
       ' collapsedNl: texts.filter(function(t){ return t.indexOf("Collapsed source newline") >= 0; })[0],' +
       ' keptNl: texts.filter(function(t){ return t.indexOf("Kept newline") >= 0; })[0],' +
       ' hasHlCode: texts.some(function(t){ return t.indexOf("computeTheValue") >= 0; }),' +
-      ' hasHlCard: texts.some(function(t){ return t.indexOf("Monthly current events") >= 0; }) }; })()');
+      ' hasHlCard: texts.some(function(t){ return t.indexOf("Monthly current events") >= 0; }),' +
+      ' ops: texts.filter(function(t){ return t.indexOf("Use the operators") >= 0; })[0],' +
+      ' hasBrandOnly: texts.some(function(t){ return t.indexOf("BrandOnlyName") >= 0; }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
     check('translate=no / .notranslate 被跳过', !edge.hasSkipped);
@@ -166,6 +170,8 @@ async function main() {
     check('讲解 HTML 标签的正文（标签写在 <code> 里）照常抽取', edge.hasDocsProse, JSON.stringify(edge.texts));
     check('裸露的序列化 HTML 仍被跳过', !edge.hasSerialized);
     check('代码高亮容器（.highlight）被跳过，类名里只是含 highlight 的正文卡片照常抽取', !edge.hasHlCode && edge.hasHlCard, JSON.stringify(edge.texts));
+    check('句中的 notranslate 行内片段（Sphinx 行内代码）原样保留在句子里', edge.ops === 'Use the operators +, - and * for arithmetic.', JSON.stringify(edge.ops));
+    check('整块只有 notranslate 片段时不送翻', !edge.hasBrandOnly);
     check('源码换行在 white-space:normal 下按空格处理，pre-line 下保留', edge.collapsedNl === 'Collapsed source newline, still one visual line.' &&
       edge.keptNl === 'Kept newline first line\nsecond line.', JSON.stringify([edge.collapsedNl, edge.keptNl]));
 

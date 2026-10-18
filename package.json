@@ -15,6 +15,7 @@
     "eval:coverage": "node tools/eval-coverage.mjs",
     "eval:cost": "node tools/eval-cost.mjs",
     "eval:layout": "node tools/eval-layout.mjs",
+    "eval:quality": "node tools/eval-quality.mjs",
     "icons": "node tools/make-icons.mjs"
   },
   "license": "MIT"

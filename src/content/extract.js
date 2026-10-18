@@ -174,6 +174,22 @@
     return ws === 'normal' || ws === 'nowrap' ? v.replace(/\n/g, ' ') : v;
   }
 
+  /*
+   * 句子里标了 translate="no" / notranslate 的行内片段（Sphinx 给每个行内代码都加 notranslate：
+   * <code class="docutils literal notranslate">+</code>）意思是「这几个字别翻」，不是「当它不存在」：
+   * 原样保留在句子里，否则送去翻译的是「the operators , , and can be used」，译文同样缺字。
+   */
+  const VERBATIM = '\u2063';                 // 标记原样保留的片段，建单元时据此判断「除此之外还有没有要翻的字」
+  const VERBATIM_RE = /\u2063[^\u2063]*\u2063/g;
+  function keepVerbatim(n) {
+    if (HARD_SKIP_TAGS.has(n.tagName) || !optsOut(n)) return false;
+    const t = n.textContent || '';
+    if (!t.trim() || t.length > 200) return false;
+    let cs = null;
+    try { cs = getComputedStyle(n); } catch (e) { return false; }
+    return /^inline/.test(cs.display) && isVisible(n);
+  }
+
   function collectText(node, out, depth, slots, lightOnly) {
     let prev = null;
     const kids = childList(node, slots, lightOnly);
@@ -185,7 +201,10 @@
       }
       if (n.nodeType !== 1) continue;
       if (n.tagName === 'BR') { out.push('\n'); prev = n; continue; }
-      if (isHardSkip(n)) continue;
+      if (isHardSkip(n)) {
+        if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); prev = n; }
+        continue;
+      }
       if (depth < 40 && !isVisible(n)) continue;
       pushGap(out, prev, n);
       collectText(n, out, depth + 1, slots || !!shadowOf(n), false);
@@ -207,6 +226,7 @@
       if (n.nodeType === 3) { if (n.nodeValue) out.push(textValue(n)); }
       else if (n.tagName === 'BR') out.push('\n');
       else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
+      else if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); }
       prev = n;
     }
     return out.join('');
@@ -287,7 +307,12 @@
 
   function pushUnit(ctx, el, text, kind, anchorNode, nodes) {
     if (ctx.units.length >= MAX_UNITS) return;
-    const norm = U.normalizeText(text);
+    let norm = U.normalizeText(text);
+    if (norm.indexOf(VERBATIM) >= 0) {
+      // 只有「不翻译」片段（整块就是一个品牌名 / 一段代码）不值得送翻
+      if (!U.isTranslatable(U.normalizeText(norm.replace(VERBATIM_RE, ' ')), ctx.settings, true)) return;
+      norm = U.normalizeText(norm.replace(/\u2063/g, ''));
+    }
     if (!U.isTranslatable(norm, ctx.settings, true)) return;
     if (kind === 'full' && isShortControl(el, norm)) return;
     // 兜底：看起来是序列化的 HTML（虚拟列表占位、隐藏的无障碍副本）绝不送去翻译

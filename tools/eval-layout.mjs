@@ -166,8 +166,8 @@ async function main() {
           await waitFor('页面加载', async () => (await cdp.evalIn(s, 'document.readyState')) === 'complete', 25000, 300).catch(() => {});
           await delay(2500);
           const before = await cdp.evalIn(s, '({ hScroll: document.documentElement.scrollWidth > innerWidth + 1, href: location.href })');
-          const tab = await cdp.evalIn(optS, '(async () => { const tabs = await chrome.tabs.query({}); const t = tabs.find((x) => x.url === ' + JSON.stringify(before.href) + '); if (!t) return null; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: t.id, toggle: true }); return { id: t.id, ok: r && r.ok }; })()');
-          if (!tab || !tab.ok) throw new Error('注入失败');
+          const tab = await cdp.evalIn(optS, '(async () => { const tabs = await chrome.tabs.query({}); const t = tabs.find((x) => x.url === ' + JSON.stringify(before.href) + '); if (!t) return null; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: t.id, toggle: true }); return { id: t.id, ok: r && r.ok, r: r }; })()');
+          if (!tab || !tab.ok) throw new Error('注入失败 ' + JSON.stringify(tab));
           const stateExpr = '(async () => { try { return await chrome.tabs.sendMessage(' + tab.id + ', { type: "wpt:state", debug: true }); } catch (e) { return null; } })()';
           const st = await waitFor('翻译完成', async () => {
             const x = await cdp.evalIn(optS, stateExpr);
@@ -188,7 +188,8 @@ async function main() {
           const fin = await cdp.evalIn(optS, stateExpr);     // 撤掉的译文数在裁切兜底之后才定下来
           // 横向滚动只算「持续存在」的：提示消失后（约 3 s）仍在才计。页面脚本重排（如瀑布流）本身有延迟
           const hScrollLate = await cdp.evalIn(s, 'document.documentElement.scrollWidth > innerWidth + 1');
-          return { status: st.status, total: st.total, translated: st.translated, failed: st.failed, dropped: (fin && fin.dropped) || 0, dropLog: (fin && fin.dropLog) || [], newHScroll: !before.hScroll && probe.hScroll && hScrollLate, hScrollTransient: !before.hScroll && probe.hScroll && !hScrollLate, toastMs, ...probe };
+          if (st.error) log(site.id + " 错误：" + st.error);
+          return { status: st.status, error: st.error || null, total: st.total, translated: st.translated, failed: st.failed, dropped: (fin && fin.dropped) || 0, dropLog: (fin && fin.dropLog) || [], newHScroll: !before.hScroll && probe.hScroll && hScrollLate, hScrollTransient: !before.hScroll && probe.hScroll && !hScrollLate, toastMs, ...probe };
         })(), delay(SITE_TIMEOUT).then(() => { throw new Error('站点超时'); })]);
         const bad = r.clipped + r.occluded + r.overflow;
         out.push({ id: site.id, cat: site.cat, ...r, badRate: r.inView ? Math.round(1000 * bad / r.inView) / 10 : null });
