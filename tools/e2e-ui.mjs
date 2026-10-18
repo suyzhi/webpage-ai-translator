@@ -138,9 +138,8 @@ async function main() {
     await freezeTransitions(cdp, popSession);
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, popSession);
     await sleep(900);
-    const pop = await cdp.evalIn(popSession, '(function(){ return { max: document.querySelector("#concurrency").max, concPresets: document.querySelectorAll("#concPresets .chip").length, hasRestore: !!document.querySelector("#restoreBtn"), quickHead: document.querySelector(".quick-head") ? document.querySelector(".quick-head").textContent : "", pill: document.querySelector("#statusPill").textContent, main: document.querySelector("#mainBtn").textContent, restoreHidden: document.querySelector("#restoreBtn").classList.contains("hidden") }; })()');
-    check('popup：并发滑块上限为 32', pop.max === '32', 'max=' + pop.max);
-    check('popup：并发快捷档位 5 个', pop.concPresets === 5, pop.concPresets);
+    const pop = await cdp.evalIn(popSession, '(function(){ return { hasConcurrency: !!document.querySelector("#concurrency"), hasRestore: !!document.querySelector("#restoreBtn"), quickHead: document.querySelector(".quick-head") ? document.querySelector(".quick-head").textContent : "", pill: document.querySelector("#statusPill").textContent, main: document.querySelector("#mainBtn").textContent, restoreHidden: document.querySelector("#restoreBtn").classList.contains("hidden") }; })()');
+    check('popup：不展示并发等性能调优项（在设置页「性能与可靠性」里）', !pop.hasConcurrency, pop.hasConcurrency);
     check('popup：存在还原按钮', pop.hasRestore, pop.hasRestore);
     check('popup：显示当前状态', !!pop.pill, pop.pill + ' / ' + pop.main);
     const popH = await cdp.evalIn(popSession, 'Math.ceil(document.querySelector(".foot").getBoundingClientRect().bottom + window.scrollY)');

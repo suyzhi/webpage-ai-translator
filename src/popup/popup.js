@@ -33,16 +33,6 @@
     }
   }
 
-  function updateConc(value) {
-    const v = Math.max(1, Math.min(32, Number(value) || 1));
-    $('concurrency').value = v;
-    $('concurrency').style.setProperty('--fill', ((v - 1) / 31 * 100) + '%');
-    $('concurrencyVal').textContent = v;
-    const chips = $('concPresets').querySelectorAll('.chip');
-    for (let i = 0; i < chips.length; i++) {
-      chips[i].setAttribute('aria-pressed', String(Number(chips[i].dataset.value) === v));
-    }
-  }
 
   function render() {
     const st = live && live.status ? live.status : 'idle';
@@ -160,8 +150,7 @@
   function overrides() {
     return {
       targetLang: $('targetLang').value,
-      displayMode: currentDisplay(),
-      concurrency: Number($('concurrency').value)
+      displayMode: currentDisplay()
     };
   }
 
@@ -193,7 +182,6 @@
     fillLanguages();
     settings = await NS.settings.get();
     $('targetLang').value = settings.targetLang;
-    updateConc(settings.concurrency);
     setDisplay(settings.displayMode);
     $('modelLabel').textContent = modelText(settings);
     $('noKey').classList.toggle('hidden', !!settings.apiKey || isLocal(settings.baseUrl));
@@ -303,14 +291,6 @@
     save({ targetLang: $('targetLang').value }).then(function () {
       if (live && (live.translated || live.status === 'done')) retranslate();
     });
-  });
-  $('concurrency').addEventListener('input', function () { updateConc(this.value); });
-  $('concurrency').addEventListener('change', function () { updateConc(this.value); save({ concurrency: Number(this.value) }); });
-  $('concPresets').addEventListener('click', function (e) {
-    const btn = e.target.closest('.chip');
-    if (!btn) return;
-    updateConc(btn.dataset.value);
-    save({ concurrency: Number(btn.dataset.value) });
   });
   $('displaySeg').addEventListener('click', function (e) {
     const btn = e.target.closest('button');

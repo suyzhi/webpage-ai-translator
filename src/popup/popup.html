@@ -12,7 +12,6 @@
     <symbol id="i-translate" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
     <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
-    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
     <symbol id="i-dual" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 10h11"/><path d="M4 15h16" opacity=".45"/><path d="M4 19h11" opacity=".45"/></symbol>
     <symbol id="i-single" viewBox="0 0 24 24"><path d="M4 8h16"/><path d="M4 13h16"/><path d="M4 18h10"/></symbol>
   </svg>
@@ -72,18 +71,6 @@
       </div>
     </div>
 
-    <div class="field">
-      <div class="label"><label for="concurrency" class="lbl"><svg class="i"><use href="#i-bolt"/></svg>并发数量</label><span class="value-pill mono" id="concurrencyVal">4</span></div>
-      <input type="range" id="concurrency" min="1" max="32" step="1" value="4">
-      <div class="chips sm" id="concPresets" role="group" aria-label="并发快捷选择">
-        <button type="button" class="chip" data-value="2">2</button>
-        <button type="button" class="chip" data-value="4">4</button>
-        <button type="button" class="chip" data-value="8">8</button>
-        <button type="button" class="chip" data-value="16">16</button>
-        <button type="button" class="chip" data-value="32">32</button>
-      </div>
-      <div class="hint" title="同一密钥的所有标签页共享此上限；触发限流会自动降速">所有标签页共享此上限，限流时自动降速；建议 3–8</div>
-    </div>
   </section>
 
   <footer class="foot">
