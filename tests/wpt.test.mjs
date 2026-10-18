@@ -321,6 +321,18 @@ test('describeError 给出可读中文提示', () => {
   assert.match(U.describeError(WPT.providers.makeError(401, '')), /密钥/);
   assert.match(U.describeError(WPT.providers.makeError(429, '')), /速率/);
   assert.match(U.describeError(WPT.providers.makeError(404, '')), /模型/);
+  // DeepSeek：余额不足 402、模型名写错 400（列出可用模型）都应是致命错误，并给出可操作的中文提示
+  const broke = WPT.providers.makeError(402, '{"error":{"message":"Insufficient Balance"}}');
+  assert.equal(broke.fatal, true);
+  assert.match(U.describeError(broke), /余额不足.*充值/);
+  const typo = WPT.providers.makeError(400, '{"error":{"message":"The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-flsh. (request_id: x)"}}');
+  assert.equal(typo.fatal, true);
+  assert.equal(typo.split, false);
+  assert.match(U.describeError(typo), /模型名有误.*deepseek-flash, deepseek-v4-pro/);
+  // 真正的上下文过长仍然拆分重试
+  const long = WPT.providers.makeError(400, 'This model\'s maximum context length is 65536 tokens');
+  assert.equal(long.split, true);
+  assert.equal(long.fatal, false);
 });
 
 /* ---------------- 语言表 ---------------- */

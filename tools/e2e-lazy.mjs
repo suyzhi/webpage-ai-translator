@@ -115,6 +115,22 @@ async function main() {
     const zhUi = await cdp.evalIn(zhS, '!!document.querySelector("wpt-ui")');
     check('自动翻译：中文页面不发请求、不弹提示', zhState && zhState.status === 'idle' && reqAfter === reqBefore && !zhUi,
       JSON.stringify({ status: zhState && zhState.status, requests: reqAfter - reqBefore, ui: zhUi }));
+
+    // 没填密钥：提示里有「去设置」，点一下就打开设置页
+    await cdp.evalIn(optSession, '(async () => { const k = "wpt.settings.v1"; const s = (await chrome.storage.local.get(k))[k]; s.autoTranslate = false; s.apiKey = ""; s.baseUrl = "https://api.deepseek.com/v1"; await chrome.storage.local.set({ [k]: s }); return true; })()');
+    const nk = await cdp.send('Target.createTarget', { url: MOCK + '/demo/test-page.html?nokey' });
+    const nks = (await cdp.send('Target.attachToTarget', { targetId: nk.targetId, flatten: true })).sessionId;
+    await cdp.send('Runtime.enable', {}, nks);
+    await waitFor('无密钥页加载', async () => (await cdp.evalIn(nks, 'document.readyState')) === 'complete', 15000);
+    await cdp.evalIn(optSession, '(async () => { const t = (await chrome.tabs.query({ url: "' + MOCK + '/demo/test-page.html?nokey" }))[0]; return chrome.runtime.sendMessage({ type: "wpt:inject", tabId: t.id, toggle: true }); })()');
+    const btn = await waitFor('无密钥提示', async () => cdp.evalIn(nks, '(function(){ const h = document.querySelector("wpt-ui"); const r = h && h.shadowRoot; if (!r || r.textContent.indexOf("尚未填写") < 0) return null; const b = [].slice.call(r.querySelectorAll("button")).find(function(x){ return x.textContent.indexOf("去设置") >= 0; }); return b ? "found" : "no-button"; })()'), 15000, 300).catch(() => null);
+    const optTabs = async () => (await cdp.send('Target.getTargets')).targetInfos.filter((t) => t.type === 'page' && t.url.indexOf('/src/options/options.html') > 0).length;
+    await cdp.send('Target.closeTarget', { targetId: opt.targetId });     // 已开着的设置页会被直接切过去：先关掉，验证按钮能重新打开
+    await delay(300);
+    const before = await optTabs();
+    await cdp.evalIn(nks, '(function(){ const r = document.querySelector("wpt-ui").shadowRoot; [].slice.call(r.querySelectorAll("button")).find(function(x){ return x.textContent.indexOf("去设置") >= 0; }).click(); return true; })()').catch(() => null);
+    const opened = await waitFor('打开设置页', async () => (await optTabs()) > before || null, 8000, 300).catch(() => false);
+    check('没填密钥：提示带「去设置」按钮，点击打开设置页', btn === 'found' && opened, JSON.stringify({ btn, before, opened }));
   } catch (err) {
     check('端到端流程抛出异常', false, err && err.message);
     if (browser && browser.stderr.length) console.error(browser.stderr.join('').slice(-1500));

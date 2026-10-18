@@ -576,12 +576,14 @@
       state.error = msg.error;
       removeAllLoaders();
       stopHeartbeat();
+      // 密钥 / 余额 / 模型名这类要去设置页改的错误：提示里直接给「去设置」，不用自己找入口
+      const toSettings = [{ label: '去设置', run: openSettings }];
       if (msg.code === 'NO_KEY') {
         setStatus(NS.STATUS.IDLE);
-        ui.show('尚未填写 API 密钥', { kind: 'err', duration: 0, sub: '点击浏览器工具栏中的扩展图标 → 设置' });
+        ui.show('尚未填写 API 密钥', { kind: 'err', duration: 0, sub: '填入你的 AI 服务密钥后再翻译', actions: toSettings });
       } else {
         setStatus(NS.STATUS.ERROR);
-        ui.show(msg.error || '翻译失败', { kind: 'err', duration: 0, sub: msg.hint || '' });
+        ui.show(msg.error || '翻译失败', { kind: 'err', duration: 0, sub: msg.hint || '', actions: msg.code === 'FATAL' ? toSettings : [] });
       }
     }
   }
@@ -1238,6 +1240,13 @@
         return false;
     }
   });
+
+  function openSettings() {
+    try {
+      const p = chrome.runtime.sendMessage({ type: 'wpt:open-options' });
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    } catch (e) {}
+  }
 
   /* ---------------- 子框架 ---------------- */
   function notifyFrames(action) {

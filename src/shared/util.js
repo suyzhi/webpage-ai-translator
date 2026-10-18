@@ -444,10 +444,18 @@
     if (!err) return '未知错误';
     if (U.isAbort(err)) return '已取消';
     const status = err.status;
-    if (status === 401 || status === 403) return 'API 密钥无效或无权限 (HTTP ' + status + ')';
-    if (status === 404) return '接口地址或模型不存在 (HTTP 404)，请检查 Base URL 与模型名';
-    if (status === 429) return '触发速率限制 (HTTP 429)，请降低并发数或稍后重试';
-    if (status >= 500) return 'AI 服务端错误 (HTTP ' + status + ')';
+    if (status === 401 || status === 403) return 'API 密钥无效或无权限（HTTP ' + status + '）：请在设置页检查密钥是否填对、是否已作废';
+    if (status === 402) return '账户余额不足（HTTP 402）：请到 AI 服务商控制台充值后重试';
+    if (err.badModel) {
+      // DeepSeek 会列出支持的模型名，直接转告
+      const m = /supported (?:api )?model names are ([^.(]+)/i.exec(err.detail || '');
+      return '模型名有误（HTTP ' + status + '）：' + (m ? '可用的模型是 ' + m[1].trim() : '请在设置页检查模型名');
+    }
+    if (status === 404) return '接口地址或模型不存在（HTTP 404）：请检查 Base URL 与模型名';
+    if (status === 422) return '请求参数不被接受（HTTP 422）：' + U.truncate(err.detail || '', 120);
+    if (status === 429) return '触发速率限制（HTTP 429）：请降低并发数或稍后重试';
+    if (status === 503) return 'AI 服务繁忙（HTTP 503）：请稍后重试';
+    if (status >= 500) return 'AI 服务端错误（HTTP ' + status + '）：请稍后重试';
     if (err.name === 'TimeoutError' || /timeout/i.test(err.message || '')) return '请求超时，请检查网络或调大超时时间';
     if (err.name === 'TypeError') return '网络请求失败：无法连接 ' + (err.url || 'API 地址') + '（检查地址/代理/网络）';
     return U.truncate(err.message || String(err), 300);

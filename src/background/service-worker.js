@@ -297,6 +297,9 @@ importScripts(
               clearTimeout(timer);
             }
           }
+          case 'wpt:open-options':
+            try { await chrome.runtime.openOptionsPage(); } catch (e) {}
+            return sendResponse({ ok: true });
           case NS.MSG.USAGE_RESET:
             await resetUsage();
             return sendResponse({ ok: true });
