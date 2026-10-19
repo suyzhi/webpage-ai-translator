@@ -665,11 +665,12 @@ const TERM_ITEMS = [
   { id: 6, text: 'Yet another neutral line of text.' },
   { id: 7, text: 'The statement is unrelated to the glossary.' }
 ];
+const GLOSSARY_ON = Object.assign({}, BASE_SETTINGS, { pageGlossary: true });
 const TERMS = [{ term: 'state', sample: 'use state in components' }, { term: 'shadow root', sample: 'Each shadow root' }, { term: 'example', sample: 'for example' }];
 
 test('术语表：先定译法；首批不等，其余批次只附上本批出现的术语', async () => {
   const calls = makeFetch(glossaryAware({ content: 'state|状态\nshadow root|影子根\nexample|-' }));
-  const { results, stats } = await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS });
+  const { results, stats } = await runEngine(GLOSSARY_ON, TERM_ITEMS, { terms: TERMS });
   assert.equal(new Map(results).size, 7);
   assert.equal(stats.failed, 0);
   assert.match(sysOf(calls[0]), /^You fix the terminology/, '术语表请求最先发出');
@@ -686,15 +687,18 @@ test('术语表：先定译法；首批不等，其余批次只附上本批出�
 
 test('术语表：请求失败时照常翻译，不附术语', async () => {
   const calls = makeFetch((call) => (/^You fix/.test(sysOf(call)) ? { __httpError: 500 } : echoTranslator()(call)));
-  const { results, stats } = await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS });
+  const { results, stats } = await runEngine(GLOSSARY_ON, TERM_ITEMS, { terms: TERMS });
   assert.equal(new Map(results).size, 7);
   assert.equal(stats.failed, 0);
   assert.ok(calls.filter((c) => !/^You fix/.test(sysOf(c))).every((c) => !/Page glossary/.test(sysOf(c))));
 });
 
-test('术语表：关闭开关或候选太少时不发术语表请求', async () => {
+test('术语表：默认关闭；关闭或候选太少时不发术语表请求；旧设置迁移为关闭', async () => {
   const calls = makeFetch(echoTranslator());
-  await runEngine(Object.assign({}, BASE_SETTINGS, { pageGlossary: false }), TERM_ITEMS, { terms: TERMS });
-  await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS.slice(0, 1) });
+  assert.equal(BASE_SETTINGS.pageGlossary, false);
+  assert.equal(WPT.settings.normalize({ pageGlossary: true, settingsRev: 4 }).pageGlossary, false);
+  assert.equal(WPT.settings.normalize({ pageGlossary: true, settingsRev: 5 }).pageGlossary, true);
+  await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS });
+  await runEngine(GLOSSARY_ON, TERM_ITEMS, { terms: TERMS.slice(0, 1) });
   assert.ok(calls.every((c) => !/^You fix/.test(sysOf(c))));
 });

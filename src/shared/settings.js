@@ -48,6 +48,8 @@
       if (s.batchChars === 2000) s.batchChars = d.batchChars;
       if (s.batchItems === 24) s.batchItems = d.batchItems;
     }
+    // 本页术语表在 0.x 预发版里曾默认开启，拖慢首屏之后的段落：已存的设置一律改回关闭，需要时用户自己再开
+    if (raw && !(raw.settingsRev >= 5)) s.pageGlossary = false;
     // DeepSeek 官方已把 deepseek-chat 并入 deepseek-flash（服务端只剩别名），迁移到正式名称，免得别名下线后报错
     if (raw && !(raw.settingsRev >= 3) && s.model === 'deepseek-chat' && /(^|\.)deepseek\.com(\/|:|$)/i.test(s.baseUrl.replace(/^https?:\/\//i, ''))) {
       s.model = 'deepseek-flash';
@@ -159,6 +161,7 @@
       markStyle: s.markStyle,
       skipTargetLang: s.skipTargetLang,
       translateTitle: s.translateTitle,
+      pageGlossary: s.pageGlossary,
       animations: s.animations
     };
   }

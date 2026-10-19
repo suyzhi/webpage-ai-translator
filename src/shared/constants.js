@@ -14,7 +14,7 @@
   NS.CACHE_PREFIX = 'wpt.c.';
   NS.CACHE_META_KEY = 'wpt.cache.meta.v1';
   NS.USAGE_KEY = 'wpt.usage.v1';
-  NS.SETTINGS_REV = 4;         // 设置结构修订号：低于此值的已存设置会做一次性迁移
+  NS.SETTINGS_REV = 5;         // 设置结构修订号：低于此值的已存设置会做一次性迁移
 
   NS.MSG = {
     PING: 'wpt:ping',
@@ -62,7 +62,7 @@
     customPrompt: '',
     // ---- 性能 ----
     lazyTranslate: true,           // 只翻译视口附近的内容，滚动到再翻（省 token）
-    pageGlossary: true,            // 长页面先定下反复出现的术语译法，各批次统一（state / 状态 不再混用）
+    pageGlossary: false,           // 长页面先定下反复出现的术语译法，各批次统一；首屏之后的段落要等它约 2 s（真实测段等待 P50 2.7 → 5.1 s），默认关
     concurrency: 4,                // 1 - 32
     batchChars: 5000,              // 批次越大，系统提示词的固定开销摊得越薄（DeepSeek 不缓存这么短的前缀，每次请求都全额计费）
     batchItems: 64,                // 真实 6 站实测：相对 24 段 / 2000 字，输入 token -22%，输出不变，0 失败

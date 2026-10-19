@@ -490,7 +490,7 @@
   /* 短页面一两批就翻完，前后不一致的机会很少，不值得多一次请求：全文 ≥ 8000 字才挑 */
   const GLOSSARY_MIN_CHARS = 8000;
   function pageTerms() {
-    if (state.byId.size < 20) return null;
+    if (!state.settings || !state.settings.pageGlossary || state.byId.size < 20) return null;
     const texts = [];
     let chars = 0;
     state.byId.forEach(function (u) { if (u && u.text) { texts.push(u.text); chars += u.text.length; } });
