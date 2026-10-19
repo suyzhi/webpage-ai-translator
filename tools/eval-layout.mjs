@@ -54,7 +54,15 @@ const PROBE = `(function () {
   const desc = (el) => { if (!el) return ''; let s = el.tagName.toLowerCase(); if (el.id) s += '#' + el.id; if (typeof el.className === 'string' && el.className.trim()) s += '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.'); return s.slice(0, 80); };
   // 不算「被译文问题遮挡」的情况：透明的点击层（如维基百科下拉菜单的隐形复选框），
   // 以及不包含该译文的固定 / 粘性浮层（Cookie 弹窗、吸顶导航）——它们同样盖住原文，与翻译无关
+  // 空的透明点击层（整张卡片可点的 span.absolute.inset-0）：没有文字、底色、背景图和边框，肉眼看不见、什么也遮不住
+  const invisibleLayer = (el) => {
+    if ((el.textContent || '').trim() || el.querySelector('img,svg,video,canvas,picture')) return false;
+    const cs = getComputedStyle(el);
+    return /^(transparent|rgba\\(0, 0, 0, 0\\))$/.test(cs.backgroundColor) && cs.backgroundImage === 'none' &&
+      !(parseFloat(cs.borderTopWidth) || parseFloat(cs.borderBottomWidth)) && cs.boxShadow === 'none' && cs.backdropFilter === 'none';
+  };
   const overlay = (hit, n) => {
+    if (invisibleLayer(hit)) return true;
     for (let x = hit; x && x !== document.documentElement; x = parentOf(x)) {
       const cs = getComputedStyle(x);
       if (cs.opacity === '0') return true;

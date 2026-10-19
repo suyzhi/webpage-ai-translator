@@ -646,3 +646,55 @@ test('流式：未在白名单的平台不开启；服务端忽略 stream 时按
   assert.equal(ignored[0].body.stream, true, 'DeepSeek 开启流式');
   assert.equal(out, '1|y', '返回的是普通 JSON 时照常解析');
 });
+
+/* ---------------- 本页术语表 ---------------- */
+function glossaryAware(glossaryReply) {
+  return (call) => {
+    const sys = call.body.messages.find((m) => m.role === 'system').content;
+    if (/^You fix the terminology/.test(sys)) return glossaryReply;
+    return echoTranslator()(call);
+  };
+}
+const sysOf = (call) => call.body.messages.find((m) => m.role === 'system').content;
+const TERM_ITEMS = [
+  { id: 1, text: 'Hooks let you use state in components.' },
+  { id: 2, text: 'Plain sentence without terms.' },
+  { id: 3, text: 'Each shadow root is attached to a host.' },
+  { id: 4, text: 'Update the state when the user clicks.' },
+  { id: 5, text: 'Another plain sentence here.' },
+  { id: 6, text: 'Yet another neutral line of text.' },
+  { id: 7, text: 'The statement is unrelated to the glossary.' }
+];
+const TERMS = [{ term: 'state', sample: 'use state in components' }, { term: 'shadow root', sample: 'Each shadow root' }, { term: 'example', sample: 'for example' }];
+
+test('术语表：先定译法；首批不等，其余批次只附上本批出现的术语', async () => {
+  const calls = makeFetch(glossaryAware({ content: 'state|状态\nshadow root|影子根\nexample|-' }));
+  const { results, stats } = await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS });
+  assert.equal(new Map(results).size, 7);
+  assert.equal(stats.failed, 0);
+  assert.match(sysOf(calls[0]), /^You fix the terminology/, '术语表请求最先发出');
+  const tr = calls.slice(1);
+  assert.ok(!/Page glossary/.test(sysOf(tr[0])), '首批（首屏）不等术语表');
+  for (const c of tr.slice(1)) {
+    const segs = segmentsOf(c).map((s) => s.text).join(' ');
+    const sys = sysOf(c);
+    assert.equal(/state → 状态/.test(sys), /\bstate\b/i.test(segs), '只在本批出现 state 时附上：' + segs);
+    assert.equal(/shadow root → 影子根/.test(sys), /shadow root/i.test(segs));
+    assert.ok(!/example/.test(sys), '模型标为 - 的词不进术语表');
+  }
+});
+
+test('术语表：请求失败时照常翻译，不附术语', async () => {
+  const calls = makeFetch((call) => (/^You fix/.test(sysOf(call)) ? { __httpError: 500 } : echoTranslator()(call)));
+  const { results, stats } = await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS });
+  assert.equal(new Map(results).size, 7);
+  assert.equal(stats.failed, 0);
+  assert.ok(calls.filter((c) => !/^You fix/.test(sysOf(c))).every((c) => !/Page glossary/.test(sysOf(c))));
+});
+
+test('术语表：关闭开关或候选太少时不发术语表请求', async () => {
+  const calls = makeFetch(echoTranslator());
+  await runEngine(Object.assign({}, BASE_SETTINGS, { pageGlossary: false }), TERM_ITEMS, { terms: TERMS });
+  await runEngine(BASE_SETTINGS, TERM_ITEMS, { terms: TERMS.slice(0, 1) });
+  assert.ok(calls.every((c) => !/^You fix/.test(sysOf(c))));
+});

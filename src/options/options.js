@@ -6,7 +6,7 @@
 
   const NUM_FIELDS = ['concurrency', 'batchChars', 'batchItems', 'firstBatchChars', 'maxRetries',
     'timeoutMs', 'minTextLength', 'temperature', 'cacheMaxEntries'];
-  const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'lazyTranslate', 'autoTranslate', 'animations', 'useCache'];
+  const BOOL_FIELDS = ['skipTargetLang', 'translateTitle', 'lazyTranslate', 'pageGlossary', 'autoTranslate', 'animations', 'useCache'];
   const TEXT_FIELDS = ['provider', 'baseUrl', 'apiKey', 'model', 'targetLang', 'sourceLang', 'customPrompt'];
   const SITE_FIELDS = ['autoSites', 'neverSites'];   // 文本框里每行一个，存储为规范化后的数组
 

@@ -111,9 +111,32 @@ test('isTranslatable：社交媒体里的标识、计数、时间不送去翻译
     '27\u4e07', '3h', '1.2K', '2-1', '0:01', '4,931', 'v2']) {
     assert.equal(U.isTranslatable(t, s), false, t);
   }
-  for (const t of ['Show more', '2 days ago', 'Who to follow', 'email me at @home please']) {
+  for (const t of ['2 days ago', 'Who to follow', 'email me at @home please']) {
     assert.equal(U.isTranslatable(t, s), true, t);
   }
+});
+
+test('isTranslatable：日历刻度与人人认得的界面词不翻（GitHub 贡献图「Jan 1月」「More 较多」）', () => {
+  const s = { minTextLength: 2, skipTargetLang: true, targetLang: 'zh-CN' };
+  for (const t of ['Jan', 'Mon', 'Wed', 'Oct 18, 2026', 'October 2026', 'Mon, 5 Oct', 'Mon 10:30 AM', 'Sept. 3',
+    'More', 'Less', 'Sign in', 'Show more', 'Read more \u2192', 'See all \u203a']) {
+    assert.equal(U.isTranslatable(t, s), false, t);
+  }
+  for (const t of ['Monday blues are real', 'January sales start now', 'More than a feeling', 'Sign in to continue', 'Less is more',
+    'March Madness', 'Mon Amour', 'Dec 2026 release notes', 'Sat on the mat', 'Today', 'Learn how we count contributions']) {
+    assert.equal(U.isTranslatable(t, s), true, t);
+  }
+});
+
+test('pickTerms：挑多段反复出现的术语，单复数只留一个，月份和停用词不算', () => {
+  const texts = ['Attach a shadow root to the host element.', 'The shadow root holds the shadow tree.', 'Each shadow root is private.',
+    'Components render UI.', 'A component returns markup.', 'Reuse components freely.', 'One component per file.', 'Small components win.', 'Name the component.', 'Released in March 2024.', 'March 2025 update.', 'Since March.'];
+  const t = U.pickTerms(texts, 8).map((x) => x.term.toLowerCase());
+  assert.ok(t.includes('shadow root'), JSON.stringify(t));
+  assert.equal(t.filter((x) => /^components?$/.test(x)).length, 1, JSON.stringify(t));
+  assert.ok(!t.some((x) => /march/.test(x)), JSON.stringify(t));
+  assert.deepEqual(U.pickTerms(texts, 8, 4), []);
+  assert.ok(U.pickTerms(texts, 8)[0].sample.length <= 90);
 });
 
 test('isProbablyTargetLang：中文句子夹英文术语仍判为中文，英文句子夹个别汉字仍判为外文', () => {

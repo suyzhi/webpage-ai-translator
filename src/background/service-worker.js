@@ -157,6 +157,7 @@ importScripts(
       settings: settings,
       cache: cache,
       quickStart: !msg.incremental,
+      terms: Array.isArray(msg.terms) ? msg.terms.slice(0, 16) : null,
       onResults: function (entries) {
         if (!job.cancelled) safePost(port, { type: NS.MSG.RESULTS, entries: entries });
       },

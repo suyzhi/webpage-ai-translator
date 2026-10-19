@@ -62,6 +62,7 @@
     customPrompt: '',
     // ---- 性能 ----
     lazyTranslate: true,           // 只翻译视口附近的内容，滚动到再翻（省 token）
+    pageGlossary: true,            // 长页面先定下反复出现的术语译法，各批次统一（state / 状态 不再混用）
     concurrency: 4,                // 1 - 32
     batchChars: 5000,              // 批次越大，系统提示词的固定开销摊得越薄（DeepSeek 不缓存这么短的前缀，每次请求都全额计费）
     batchItems: 64,                // 真实 6 站实测：相对 24 段 / 2000 字，输入 token -22%，输出不变，0 失败

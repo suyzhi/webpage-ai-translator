@@ -50,6 +50,10 @@
     this.finished = false;
     this.fatalError = null;
     this.systemPrompt = NS.prompt.buildSystem(this.settings);
+    this.glossary = null;          // 本页术语表 [{ term, to, re }]；null = 尚未就绪
+    this.glossaryWait = null;
+    this.firstCall = true;
+    if (this.settings.pageGlossary && o.terms && o.terms.length >= 2) this.startGlossary(o.terms);
     this.stats = { total: 0, done: 0, cached: 0, failed: 0, requests: 0, batches: 0, startedAt: Date.now(),
       usage: { input: 0, output: 0, cached: 0 } };
     this.failedIds = [];
@@ -63,6 +67,43 @@
   }
 
   Engine.limiterFor = limiterFor;
+
+  /*
+   * 本页术语表：与首批并行请求；首批（首屏）不等它，其余批次最多等 GLOSSARY_WAIT_MS，超时或失败就照常翻译。
+   */
+  const GLOSSARY_WAIT_MS = 2500;
+  Engine.prototype.startGlossary = function (terms) {
+    const self = this;
+    const meta = {};
+    this.glossaryDeadline = Date.now() + GLOSSARY_WAIT_MS;
+    this.glossaryWait = NS.providers.call(this.settings, {
+      system: NS.prompt.glossarySystem(this.settings),
+      user: NS.prompt.glossaryUser(terms),
+      maxTokens: 512
+    }, this.signal, meta).then(function (raw) {
+      self.glossary = NS.prompt.parseGlossary(raw, terms);
+      self.log('本页术语表：' + self.glossary.map(function (e) { return e.term + '→' + e.to; }).join('，'));
+    }, function (e) {
+      self.glossary = [];
+      self.log('术语表请求失败，照常翻译：' + U.describeError(e));
+    }).then(function () {
+      if (meta.usage) self.addUsage(meta.usage);
+    });
+  };
+
+  Engine.prototype.systemFor = async function (batch) {
+    const first = this.firstCall;
+    this.firstCall = false;
+    if (!this.glossaryWait) return this.systemPrompt;
+    if (this.glossary === null && !first) {
+      const left = this.glossaryDeadline - Date.now();
+      if (left > 0) await Promise.race([this.glossaryWait, new Promise(function (r) { setTimeout(r, left); })]);
+    }
+    const g = this.glossary;
+    if (!g || !g.length) return this.systemPrompt;
+    const hit = g.filter(function (e) { return batch.some(function (it) { return e.re.test(it.sourceProtected); }); });
+    return hit.length ? this.systemPrompt + NS.prompt.glossarySection(hit) : this.systemPrompt;
+  };
 
   Engine.prototype.stop = function () {
     this.stopped = true;
@@ -297,6 +338,7 @@
     const items = [];
     for (let i = 0; i < batch.length; i++) items.push({ id: i + 1, text: batch[i].sourceProtected });
     const user = NS.prompt.buildUser(items);
+    const system = await this.systemFor(batch);
     await this.limiter.acquire(this.signal);
     let raw;
     const meta = {};
@@ -320,7 +362,7 @@
     try {
       this.stats.requests++;
       raw = await NS.providers.call(this.settings, {
-        system: this.systemPrompt,
+        system: system,
         user: user,
         maxTokens: NS.providers.estimateMaxTokens(user),
         onPartial: onPartial

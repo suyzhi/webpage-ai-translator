@@ -190,13 +190,22 @@
     return /^inline/.test(cs.display) && isVisible(n);
   }
 
+  /* 字号为 0 的元素里的文字看不见（Notion 帮助中心的卡片：标题文字设 font-size:0，显示的是图片）；子元素可以重设字号，只管直接文字 */
+  function zeroFont(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try { return parseFloat(getComputedStyle(el).fontSize) === 0; } catch (e) { return false; }
+  }
+
   function collectText(node, out, depth, slots, lightOnly) {
     let prev = null;
+    let mute = null;
     const kids = childList(node, slots, lightOnly);
     for (let i = 0; i < kids.length; i++) {
       const n = kids[i];
       if (n.nodeType === 3) {
-        if (n.nodeValue) { out.push(textValue(n)); prev = n; }
+        if (!n.nodeValue) continue;
+        if (mute === null && n.nodeValue.trim()) mute = zeroFont(node);
+        if (!mute) { out.push(textValue(n)); prev = n; }
         continue;
       }
       if (n.nodeType !== 1) continue;
@@ -221,9 +230,10 @@
   function inlineTextOfNodes(nodes) {
     const out = [];
     let prev = null;
+    const mute = nodes.length > 0 && zeroFont(nodes[0].parentNode);
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      if (n.nodeType === 3) { if (n.nodeValue) out.push(textValue(n)); }
+      if (n.nodeType === 3) { if (n.nodeValue && !mute) out.push(textValue(n)); }
       else if (n.tagName === 'BR') out.push('\n');
       else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
       else if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); }

@@ -21,7 +21,7 @@ const ONLY = arg('only', '') ? new Set(arg('only').split(',')) : null;
 const REAL = argv.includes('--real');
 const MODEL = arg('model', 'deepseek-flash');
 const OVERRIDES = Object.fromEntries((arg('set', '') || '').split(',').filter(Boolean)
-  .map((kv) => { const [k, v] = kv.split('='); return [k, isNaN(Number(v)) ? v : Number(v)]; }));
+  .map((kv) => { const [k, v] = kv.split('='); return [k, v === 'true' ? true : v === 'false' ? false : isNaN(Number(v)) ? v : Number(v)]; }));
 const TEXT_DIR = path.join(ROOT, '.cache', 'eval', 'texts');
 const MAX_REAL_SEGMENTS = 400;          // 真实模式每站最多翻这么多段，控制花费
 
@@ -71,7 +71,8 @@ async function runSite(id, texts) {
       rec.userTok += estTokens(msg.user);
       const segs = msg.user.split('\n');
       rec.items.push(segs.length);
-      const out = msg.user;
+      // 术语表请求：按「term|term」回复，后续批次照常附上术语段，开销才算得进来
+      const out = /^You fix the terminology/.test(msg.system) ? msg.user.split('\n').map((l) => l.split(' — ')[0] + '|' + l.split(' — ')[0]).join('\n') : msg.user;
       meta.usage = { input: Math.round(estTokens(msg.system) + estTokens(msg.user)), output: Math.round(estTokens(out)), cached: 0 };
       return out;
     };
@@ -85,6 +86,7 @@ async function runSite(id, texts) {
   const t0 = Date.now();
   const engine = new NS.Engine({
     settings, cache: nullCache, limiter: new U.Limiter(settings.concurrency),
+    terms: list.length >= 20 && list.reduce((s, x) => s + x.text.length, 0) >= 8000 ? U.pickTerms(list.map((x) => x.text), 8, 4) : null,   // 与内容脚本 pageTerms 同一口径
     onResults: (pairs) => {
       const t = Date.now() - t0;
       if (rec.firstAt == null) rec.firstAt = t;

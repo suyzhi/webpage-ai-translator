@@ -372,6 +372,32 @@
   }
 
   /*
+   * 居中错觉：容器继承了 text-align:center，但宽度是原文那一行撑出来的（浮动 / 行内块 / 绝对定位的收缩包裹），
+   * 原文看起来是左对齐，比它短的译文却缩进到中间（GitHub 贡献图下的「Learn how we count contributions」）。
+   * 只改单行原文、无底色无边框的普通文字；按钮式的胶囊保持居中。
+   */
+  function centeredMisfit(node, src) {
+    const ncs = css(node);
+    if (!ncs || !/center$/.test(ncs.textAlign) || !src || !src.getBoundingClientRect) return false;
+    let c = composedParent(node);
+    while (c && /^inline/.test((css(c) || {}).display || '')) c = composedParent(c);
+    if (!c || c === document.body) return false;
+    const ccs = css(c);
+    const cw = c.clientWidth - (parseFloat(ccs.paddingLeft) || 0) - (parseFloat(ccs.paddingRight) || 0);
+    const sr = src.getBoundingClientRect(), nr = node.getBoundingClientRect();
+    const lh = parseFloat(ncs.lineHeight) || (parseFloat(ncs.fontSize) || 16) * 1.4;
+    const sh = src.contains(node) ? sr.height - nr.height - (parseFloat(ncs.marginTop) || 0) : sr.height;   // 只量原文那部分
+    if (cw < 20 || sr.width < cw - 2 || sh > lh * 1.6) return false;
+    if (nr.height > lh * 1.6) return false;        // 译文本身多行：居中与否差别不大
+    for (let e = src; e && e !== c.parentNode; e = composedParent(e)) {
+      if (e.matches && e.matches('button,[role="button"]')) return false;
+      const ecs = css(e);
+      if (ecs && (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(ecs.backgroundColor) || parseFloat(ecs.borderTopWidth) > 0 || parseFloat(ecs.borderBottomWidth) > 0)) return false;
+    }
+    return true;
+  }
+
+  /*
    * 长段落放不下（限高的摘要预览、line-clamp 卡片）：把译文放到定高容器之后，
    * 并截成与原文露出部分相同的行数 —— 读者看到的是「原文预览 + 译文预览」，而不是没有译文。
    * 只在容器像一块「预览」时这样做：不太高、文字不多、父元素按块排布（放进 flex/grid 行会多出一格）。
@@ -507,6 +533,7 @@
     insertLoader: insertLoader,
     isClipped: isClipped,
     clipBox: clipBox,
+    centeredMisfit: centeredMisfit,
     afterClipPlan: afterClipPlan,
     navMisfit: navMisfit,
     hideOriginal: hideOriginal,

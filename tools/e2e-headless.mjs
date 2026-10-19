@@ -102,11 +102,15 @@ async function main() {
       ' document.body.insertBefore(mas, document.body.firstChild);' +
       ' function lay(){ let sum = 0; for (const k of mas.children) sum += k.offsetHeight; mas.style.height = Math.ceil(sum / 3 + 8) + "px"; }' +
       ' lay(); window.addEventListener("resize", lay);' +
-      // 贡献图（GitHub 式）：绝对定位的星期标签贴在 11px 高的行上、bottom 锚定，译文换行会向上长出、压住上面几行；
+      // 贡献图（GitHub 式）：绝对定位的行标签贴在 11px 高的行上、bottom 锚定，译文换行会向上长出、压住上面几行；
       // 对照：紧贴按钮弹出的菜单本来就比按钮高，菜单项译文照常显示
       ' const cal = document.createElement("div"); cal.id = "e2e-cal"; cal.style.cssText = "font:12px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif";' +
-      ' cal.innerHTML = \'<table style="width:auto;border-spacing:4px;border-collapse:separate;margin:0"><tbody>\' + ["Mon", "", "Wed"].map(function(d){ return \'<tr style="height:11px"><td style="position:relative;width:29px;min-width:29px;max-width:29px;padding:0;border:0;font-size:12px;line-height:1.5"><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">\' + d + \'day</span><span aria-hidden="true" style="position:absolute;bottom:-4px">\\n \' + d + \'\\n</span></td><td style="width:11px;padding:0;border:0;background:#ccc"></td></tr>\'; }).join("") + "</tbody></table>" +' +
-      '   \'<div style="position:relative;display:inline-block;height:24px"><button>Menu</button><ul id="e2e-pop" style="position:absolute;top:0;left:0;margin:0;padding:4px;list-style:none;background:#eee"><li>Edit profile</li><li>Copy link</li><li>Delete post</li></ul></div>\';' +
+      ' cal.innerHTML = \'<table style="width:auto;border-spacing:4px;border-collapse:separate;margin:0"><tbody>\' + ["Low", "", "High"].map(function(d){ return \'<tr style="height:11px"><td style="position:relative;width:29px;min-width:29px;max-width:29px;padding:0;border:0;font-size:12px;line-height:1.5"><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">\' + d + \'day</span><span aria-hidden="true" style="position:absolute;bottom:-4px">\\n \' + d + \'\\n</span></td><td style="width:11px;padding:0;border:0;background:#ccc"></td></tr>\'; }).join("") + "</tbody></table>" +' +
+      '   \'<div style="position:relative;display:inline-block;height:24px"><button>Menu</button><ul id="e2e-pop" style="position:absolute;top:0;left:0;margin:0;padding:4px;list-style:none;background:#eee"><li>Edit profile</li><li>Copy link</li><li>Delete post</li></ul></div>\' +' +
+      // 日历刻度与图例词不翻；继承了居中、宽度由原文撑出的浮动块：译文左对齐，按钮式胶囊保持居中
+      '   \'<div id="e2e-trivial"><div>Jan</div><div>Oct 18, 2026</div><div>More</div></div>\' +' +
+      '   \'<div style="text-align:center;overflow:hidden"><div id="e2e-center" style="float:left"><a href="#">Learn how we count contributions</a></div>\' +' +
+      '   \'<div id="e2e-pill" style="float:right"><span style="display:inline-block;padding:4px 10px;background:#ddd;border-radius:9px">Download the latest release</span></div></div>\';' +
       ' document.body.insertBefore(cal, document.body.firstChild); return true; })()');
 
     const trigger = await cdp.evalIn(optSession, '(async () => { const tabs = await chrome.tabs.query({ url: "' + MOCK + '/*" }); if (!tabs.length) return { error: "no tab" }; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: tabs[0].id, toggle: true }); return { tabId: tabs[0].id, r }; })()');
@@ -161,6 +165,9 @@ async function main() {
       ' return { inLabel: document.querySelectorAll("#e2e-cal table .wpt-translation").length, titles: sp.map(function(s){ return s.title; }).join("/"),' +
       ' top: Math.round(td.top - r.top), menu: document.querySelectorAll("#e2e-pop .wpt-translation").length }; })()');
     check('绝对定位的小标签：译文放不下改为悬停提示，标签不长出格子；弹出菜单照常翻译', cal.inLabel === 0 && /[\u4e00-\u9fff]/.test(cal.titles) && cal.top < 8 && cal.menu === 3, JSON.stringify(cal));
+    const tidy = await cdp.evalIn(pageSession, '(function(){ const al = function(id){ const t = document.querySelector(id + " .wpt-translation"); return t ? getComputedStyle(t).textAlign : "none"; };' +
+      ' return { trivial: document.querySelectorAll("#e2e-trivial .wpt-translation").length, center: al("#e2e-center"), pill: al("#e2e-pill") }; })()');
+    check('日历刻度与图例词不翻；收缩包裹的居中块里译文左对齐，胶囊按钮仍居中', tidy.trivial === 0 && tidy.center === 'start' && /center/.test(tidy.pill), JSON.stringify(tidy));
     check('横向导航：短标签译文行内同一行，放不下的撤掉', menu[0] === 'inline:same-line' && menu[1] === 'inline:same-line' && menu[2] === 'none', JSON.stringify(menu));
 
     const stats = await httpJson(MOCK + '/__stats');

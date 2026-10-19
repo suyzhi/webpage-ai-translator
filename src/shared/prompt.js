@@ -123,6 +123,45 @@
     return out;
   }
 
+  /*
+   * 本页术语表：每批请求互相独立，模型看不到别的批次怎么译，同一术语会一会儿译成「状态」、一会儿保留 state。
+   * 翻译开始时先用一个很小的请求定下这些术语的译法，之后每批只附上本批出现的那几条。
+   */
+  function glossarySystem(settings) {
+    const target = targetName(settings);
+    return [
+      'You fix the terminology for translating one web page into ' + target + '.',
+      'Input: one candidate term per line, formatted as term — sample sentence from the page.',
+      'Keep only real domain terms, names of concepts or features that must read the same everywhere; skip ordinary words whose translation depends on context.',
+      'For each kept term output one line: term|rendering. rendering = how ' + target + ' technical writing normally renders it' +
+        ' (keep it in English if that is the norm, e.g. API, class or product names). No other text.'
+    ].join('\n');
+  }
+
+  function glossaryUser(terms) {
+    return terms.map(function (t) { return t.term + ' — ' + String(t.sample || '').replace(/[\r\n]+/g, ' ').slice(0, 140); }).join('\n');
+  }
+
+  /* 只收候选里有的术语（防止模型自己加词）；返回 [{ term, to, re }] */
+  function parseGlossary(raw, terms) {
+    const wanted = new Map(terms.map(function (t) { return [t.term.toLowerCase(), t.term]; }));
+    const out = [];
+    String(raw || '').split(/\r?\n/).forEach(function (line) {
+      const m = /^\s*([^|]{1,60}?)\s*\|\s*(.{1,60}?)\s*$/.exec(line);
+      if (!m) return;
+      const term = wanted.get(m[1].toLowerCase());
+      if (!term || !m[2] || m[2] === '-' || out.some(function (e) { return e.term === term; })) return;
+      const pat = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+      out.push({ term: term, to: m[2], re: new RegExp('(^|[^\\p{L}\\p{N}])' + pat + '(?=$|[^\\p{L}\\p{N}])', 'iu') });
+    });
+    return out;
+  }
+
+  function glossarySection(entries) {
+    return '\n\nPage glossary — render these terms exactly like this in every segment:\n' +
+      entries.map(function (e) { return e.term + ' → ' + e.to; }).join('\n');
+  }
+
   /* 供「测试连接」使用的极简请求 */
   function buildTestMessages() {
     return {
@@ -131,5 +170,6 @@
     };
   }
 
-  NS.prompt = { buildSystem: buildSystem, buildUser: buildUser, encode: encode, parse: parse, targetName: targetName, sourceName: sourceName, buildTestMessages: buildTestMessages };
+  NS.prompt = { buildSystem: buildSystem, buildUser: buildUser, encode: encode, parse: parse, targetName: targetName, sourceName: sourceName, buildTestMessages: buildTestMessages,
+    glossarySystem: glossarySystem, glossaryUser: glossaryUser, parseGlossary: parseGlossary, glossarySection: glossarySection };
 })();

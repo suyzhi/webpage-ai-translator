@@ -241,6 +241,73 @@
   const NAME_HANDLE_RE = /^(?:\S+\s){1,6}@[\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?$/u;
   const TAG_ONLY_RE = /^(?:[@#\uff03$][\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?(?:[\s\u00b7\u2022,\uff0c\u3001|/]+|$))+$/u;
 
+  /*
+   * 翻了反而添乱的极短标签：日历刻度（Jan / Mon / Oct 18, 2026 / Mon 10:30 AM）与人人认得的界面词（More / Less / Sign in）。
+   * 贡献图、日期列、图例里成排出现，「Jan 1月」「More 较多」只会把版面挤乱、白花 token。整段恰好是这些词才算。
+   */
+  const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  const WEEKDAY = '(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)';
+  const CAL_TOKEN = '(?:' + MONTH + '|' + WEEKDAY + '|\\d{1,4}(?:st|nd|rd|th)?|\\d{1,2}:\\d{2}(?::\\d{2})?|[ap]\\.?m\\.?)\\.?';
+  const CALENDAR_RE = new RegExp('^(?=.*\\b(?:' + MONTH + '|' + WEEKDAY + ')\\b)' + CAL_TOKEN + '(?:[\\s,/\\-\u2013]+' + CAL_TOKEN + ')*$', 'i');
+  const UI_WORD_RE = new RegExp('^(?:more|less|next|prev(?:ious)?|back|home|menu|search|share|reply|edit|delete|save|cancel|ok|yes|no|close|copy|' +
+    'like|follow|log ?in|log ?out|sign ?in|sign ?up|sign ?out|subscribe|top|new|hot|best|all|' +
+    '(?:show|see|read|load|view) (?:more|less|all))[\\s.:\u2026\u203a\u00bb>\u2192\u25be\u25b8]*$', 'i');
+  U.isTrivialLabel = function (s) {
+    return s.length <= 40 && (CALENDAR_RE.test(s) || UI_WORD_RE.test(s));
+  };
+
+  /*
+   * 本页术语候选：在 ≥ minUnits（默认 3）段里出现的 1–3 词短语（去掉首尾停用词、月份星期），按「出现段数 × 词数」排序，
+   * 被已选更长短语包含的、或包含已选短语的去掉。返回 [{ term: 首次出现时的原样大小写, sample: 所在句子片段 }]。
+   * 送给模型先定译法（见 engine 的本页术语表），也供术语一致性评测选题。
+   */
+  const TERM_STOP = new Set(('a an the and or but of to in on at by for with from as is are was were be been being it its this that these those ' +
+    'you your we our they their he she his her i me my not no can will would should could may might must do does did done has have had ' +
+    'if then than so such also more most other some any each all one two use used using how what when where which who why new see ' +
+    'about into over after before between through out up down only just like here there get set make way first last many much very ' +
+    'retrieved archived original').split(' '));
+  U.pickTerms = function (texts, n, minUnits) {
+    const need = minUnits || 3;
+    const seen = new Map();
+    for (let idx = 0; idx < texts.length; idx++) {
+      const t = String(texts[idx] || '');
+      const words = t.match(/[A-Za-z][A-Za-z0-9-]*(?:'[a-z]+)?/g) || [];
+      const lower = words.map((w) => w.toLowerCase());
+      const local = new Set();
+      for (let k = 1; k <= 3; k++) {
+        for (let i = 0; i + k <= words.length; i++) {
+          const g = lower.slice(i, i + k);
+          if (TERM_STOP.has(g[0]) || TERM_STOP.has(g[k - 1])) continue;
+          if (k === 1 && g[0].length < 5) continue;
+          if (g.some((w) => U.isTrivialLabel(w))) continue;
+          const key = g.join(' ');
+          if (local.has(key)) continue;
+          local.add(key);
+          let c = seen.get(key);
+          if (!c) {
+            const orig = words.slice(i, i + k).join(' ');
+            const at = t.indexOf(orig);
+            c = { term: orig, sample: t.slice(Math.max(0, at - 30), at + orig.length + 40).replace(/\s+/g, ' ').trim(), units: 0 };
+            seen.set(key, c);
+          }
+          c.units++;
+        }
+      }
+    }
+    const cands = [];
+    seen.forEach((c, key) => { if (c.units >= need) cands.push({ key: key, c: c, score: c.units * key.split(' ').length }); });
+    cands.sort((a, b) => b.score - a.score);
+    const out = [];
+    for (let i = 0; i < cands.length && out.length < n; i++) {
+      const k = cands[i].key;
+      const sing = k.replace(/s$/, '');
+      if (out.some((o) => (' ' + o.key + ' ').indexOf(' ' + k + ' ') >= 0 || (' ' + k + ' ').indexOf(' ' + o.key + ' ') >= 0 ||
+        o.key.replace(/s$/, '') === sing)) continue;                       // component / components 只留一个
+      out.push(cands[i]);
+    }
+    return out.map((o) => ({ term: o.c.term, sample: o.c.sample, units: o.c.units }));
+  };
+
   /* 该段文本是否值得送去翻译 */
   U.isTranslatable = function (text, settings, preNormalized) {
     const s = preNormalized ? String(text == null ? '' : text) : U.normalizeText(text);
@@ -254,6 +321,7 @@
     if (TAG_ONLY_RE.test(s) || NAME_HANDLE_RE.test(s)) return false;
     // 数字 + 极少字母：计数、时间、比分之类（3h / 1.2K / 27万 / v2 / 2-1 W）
     if (letters <= 2 && /\d/.test(s)) return false;
+    if (U.isTrivialLabel(s)) return false;
     if (settings && settings.skipTargetLang && U.isProbablyTargetLang(s, settings.targetLang)) return false;
     return true;
   };

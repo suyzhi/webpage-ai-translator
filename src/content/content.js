@@ -487,6 +487,18 @@
     start(null);
   }
 
+  /* 短页面一两批就翻完，前后不一致的机会很少，不值得多一次请求：全文 ≥ 8000 字才挑 */
+  const GLOSSARY_MIN_CHARS = 8000;
+  function pageTerms() {
+    if (state.byId.size < 20) return null;
+    const texts = [];
+    let chars = 0;
+    state.byId.forEach(function (u) { if (u && u.text) { texts.push(u.text); chars += u.text.length; } });
+    if (chars < GLOSSARY_MIN_CHARS) return null;
+    const t = U.pickTerms(texts, 8, 4);
+    return t.length >= 2 ? t.map(function (x) { return { term: x.term, sample: x.sample }; }) : null;
+  }
+
   /* ---------------- 端口通信 ---------------- */
   function connectAndSend() {
     disconnectPort();
@@ -516,8 +528,10 @@
     });
     if (!items.length) return;
     try {
+      // 本任务的第一条消息带上整页（含尚未进入视口的段落）的术语候选，后台据此先定译法
+      const terms = state.sent.size ? null : pageTerms();
       // incremental：滚动 / 动态内容的后续请求，后台不必再切「小首批」（每个小批都要重复携带系统提示词）
-      state.port.postMessage({ type: NS.MSG.START, items: items, overrides: state.overrides, incremental: !state.announce });
+      state.port.postMessage({ type: NS.MSG.START, items: items, overrides: state.overrides, incremental: !state.announce, terms: terms });
       for (let i = 0; i < ids.length; i++) state.sent.add(ids[i]);
     } catch (e) {
       onPortDisconnect();
@@ -781,6 +795,7 @@
     if (!state.settings || onlyTranslation()) return;
     const fix = [];
     const drop = [];
+    const realign = [];
     for (let i = 0; i < list.length; i++) {
       const node = list[i];
       const u = node.isConnected ? state.nodeUnit.get(node) : null;
@@ -810,7 +825,9 @@
       const box = R.clipBox(node, u.el);
       // 长段落改行内也放不下：优先移到定高容器之后（同样在读阶段算好位置）
       if (box) fix.push([u, node, u.clipFallback ? null : R.afterClipPlan(u, box)]);
+      else if (node.style.display === 'block' && R.centeredMisfit(node, u.el)) realign.push(node);
     }
+    for (let i = 0; i < realign.length; i++) realign[i].style.textAlign = 'start';
     for (let i = 0; i < drop.length; i++) {
       drop[i][1].remove();
       state.nodes.delete(drop[i][0].id);

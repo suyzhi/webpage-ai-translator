@@ -53,7 +53,7 @@
       s.model = 'deepseek-flash';
     }
     s.settingsRev = NS.SETTINGS_REV;
-    const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations', 'lazyTranslate'];
+    const flags = ['skipTargetLang', 'translateTitle', 'useCache', 'autoTranslate', 'animations', 'lazyTranslate', 'pageGlossary'];
     for (let i = 0; i < flags.length; i++) s[flags[i]] = !!s[flags[i]];
     return s;
   }

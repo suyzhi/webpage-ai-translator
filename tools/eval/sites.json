@@ -40,5 +40,13 @@
   { "id": "coursera",      "cat": "教育",   "url": "https://www.coursera.org/learn/machine-learning" },
   { "id": "nhk",           "cat": "日文",   "url": "https://www3.nhk.or.jp/news/" },
   { "id": "lemonde",       "cat": "法文",   "url": "https://www.lemonde.fr/" },
-  { "id": "spiegel",       "cat": "德文",   "url": "https://www.spiegel.de/" }
+  { "id": "spiegel",       "cat": "德文",   "url": "https://www.spiegel.de/" },
+  { "id": "github-profile", "cat": "开发",  "url": "https://github.com/torvalds" },
+  { "id": "github-issues", "cat": "开发",   "url": "https://github.com/microsoft/vscode/issues" },
+  { "id": "notion-help",   "cat": "文档",   "url": "https://www.notion.com/help" },
+  { "id": "tailwind-docs", "cat": "文档",   "url": "https://tailwindcss.com/docs/installation/using-vite" },
+  { "id": "stripe-docs",   "cat": "文档",   "url": "https://docs.stripe.com/payments/checkout" },
+  { "id": "producthunt",   "cat": "社区",   "url": "https://www.producthunt.com/" },
+  { "id": "wp-news",       "cat": "博客",   "url": "https://wordpress.org/news/" },
+  { "id": "goodreads",     "cat": "娱乐",   "url": "https://www.goodreads.com/book/show/5907.The_Hobbit" }
 ]

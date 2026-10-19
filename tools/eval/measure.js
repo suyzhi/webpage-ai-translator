@@ -204,7 +204,7 @@
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
       if (r.width < 2 || r.height < 4 || r.right + scrollX <= 0 || r.left + scrollX >= docW || r.bottom + scrollY <= 0) continue;
-      if (isTargetLang(s)) continue;
+      if (isTargetLang(s) || NS.util.isTrivialLabel(s.trim().replace(/\s+/g, ' '))) continue;   // 插件有意不翻的极短标签不计入基准
       const w = weight(s);
       if (!w) continue;
       if (optedOut(el)) { optOutW += w; continue; }

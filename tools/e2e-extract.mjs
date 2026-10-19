@@ -129,7 +129,9 @@ async function main() {
       + '<div class="highlight highlight-source-js"><div>const answer = computeTheValue(input);</div></div>'
       + '<ul><li class="community-highlight-card"><h2>Monthly current events megathread for readers</h2></li></ul>'
       + '<p>Use the operators <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="notranslate">-</code> and <span translate="no">*</span> for arithmetic.</p>'
-      + '<p><span class="notranslate">BrandOnlyName Widget</span></p>';
+      + '<p><span class="notranslate">BrandOnlyName Widget</span></p>'
+      + '<a href="#" style="display:block;font-size:0">Zero size card title<span style="font-size:14px"> but this child is readable</span></a>'
+      + '<ul style="font-size:0"><li style="display:inline-block;font-size:16px">Inline block reset item text</li></ul>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -154,7 +156,8 @@ async function main() {
       ' hasHlCode: texts.some(function(t){ return t.indexOf("computeTheValue") >= 0; }),' +
       ' hasHlCard: texts.some(function(t){ return t.indexOf("Monthly current events") >= 0; }),' +
       ' ops: texts.filter(function(t){ return t.indexOf("Use the operators") >= 0; })[0],' +
-      ' hasBrandOnly: texts.some(function(t){ return t.indexOf("BrandOnlyName") >= 0; }) }; })()');
+      ' hasBrandOnly: texts.some(function(t){ return t.indexOf("BrandOnlyName") >= 0; }),' +
+      ' zero: texts.filter(function(t){ return /Zero size card|child is readable|Inline block reset/.test(t); }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
     check('translate=no / .notranslate 被跳过', !edge.hasSkipped);
@@ -172,6 +175,8 @@ async function main() {
     check('代码高亮容器（.highlight）被跳过，类名里只是含 highlight 的正文卡片照常抽取', !edge.hasHlCode && edge.hasHlCard, JSON.stringify(edge.texts));
     check('句中的 notranslate 行内片段（Sphinx 行内代码）原样保留在句子里', edge.ops === 'Use the operators +, - and * for arithmetic.', JSON.stringify(edge.ops));
     check('整块只有 notranslate 片段时不送翻', !edge.hasBrandOnly);
+    check('字号为 0 的文字不送翻，子元素重设字号的照常抽取', edge.zero.length === 2 && !edge.zero.some(function (t) { return /Zero size/.test(t); }) &&
+      edge.zero.some(function (t) { return /child is readable/.test(t); }) && edge.zero.some(function (t) { return /Inline block reset/.test(t); }), JSON.stringify(edge.zero));
     check('源码换行在 white-space:normal 下按空格处理，pre-line 下保留', edge.collapsedNl === 'Collapsed source newline, still one visual line.' &&
       edge.keptNl === 'Kept newline first line\nsecond line.', JSON.stringify([edge.collapsedNl, edge.keptNl]));
 
