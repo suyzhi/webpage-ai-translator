@@ -333,15 +333,42 @@
     const r = node.getBoundingClientRect();
     if (r.width < 1 || r.height < 1 || !src || !src.getBoundingClientRect) return null;
     const sr = src.getBoundingClientRect();
+    let floating = false;
     for (let a = composedParent(node), d = 0; a && d < 12; a = composedParent(a), d++) {
       if (a === document.body || a === document.documentElement) break;
       const cs = css(a);
       if (!cs || cs.display === 'contents' || /^inline/.test(cs.display)) continue;
+      // 浮层（绝对 / 固定定位）之外的祖先不随它撑高：只有真正裁切内容的才算
+      if (floating && cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
       const ar = a.getBoundingClientRect();
+      if (cs.position === 'absolute' && absLabelOverflow(a, cs, ar, node)) return a;
       if (sr.top >= ar.bottom - 2) return null;
       if (r.bottom > ar.bottom + 2) return a;
+      if (cs.position === 'absolute' || cs.position === 'fixed') floating = true;
     }
     return null;
+  }
+
+  /*
+   * 绝对定位的小标签（GitHub 贡献图的 Mon / Wed / Fri：贴在 11px 高的表格行上、bottom 锚定）：
+   * 译文换行后标签向上或向下长出锚点格子、或在同一行向右伸出去，压到相邻的行和格子上；正常流里的溢出检查看不出来。
+   * 只认「标签与锚点重叠、文字很短、去掉译文时并不超出」的情形，本来就比锚点大的下拉菜单、浮层卡片不受影响。
+   */
+  function absLabelOverflow(a, cs, ar, node) {
+    const op = a.offsetParent;
+    if (!op || op === document.body || visualLength(a.textContent) > SHORT_TEXT * 2) return false;
+    const or = op.getBoundingClientRect();
+    const tv = Math.max(4, (parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.3) / 2);
+    const out = function (b) {
+      return b.top < or.bottom - 2 && b.bottom > or.top + 2 &&
+        (b.top < or.top - tv || b.bottom > or.bottom + tv || b.left < or.left - 4 || b.right > or.right + 4);
+    };
+    if (!out(ar)) return false;
+    const prev = node.style.display;
+    node.style.display = 'none';
+    const before = a.getBoundingClientRect();
+    node.style.display = prev;
+    return !out(before);
   }
 
   /*
@@ -360,11 +387,12 @@
     // 链接、按钮里的短文案搬到外面就脱离了原来的可点区域，宁可不显示
     if (allowShort && (box.closest(INTERACTIVE_SEL) || el.closest(INTERACTIVE_SEL))) return null;
     if (RIGID_PARENT.has(parent.tagName) || isRowFlow(css(parent)) || inHorizontalNav(box)) return null;
+    const bcs = css(box);
+    if (bcs && (bcs.position === 'absolute' || bcs.position === 'fixed')) return null;   // 浮在别处的盒子，放其后会落到不相干的位置
     const br = box.getBoundingClientRect();
     if (br.height > Math.max(240, (globalThis.innerHeight || 800) * 0.5)) return null;
     if (visualLength(box.textContent) > PREVIEW_MAX_TEXT) return null;
     const src = typographySource(el);
-    const bcs = css(box);
     let lines = 0;
     if (bcs && !(bcs.overflowY === 'visible' && bcs.overflowX === 'visible')) {
       const scs = css(src);

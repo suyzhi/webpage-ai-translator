@@ -101,7 +101,13 @@ async function main() {
       ' mas.innerHTML = [1,2,3,4,5,6].map(function(i){ return \'<div style="width:33%;box-sizing:border-box;padding:4px"><p style="margin:0">Masonry card number \' + i + \' explains one topic in a single sentence.</p></div>\'; }).join("");' +
       ' document.body.insertBefore(mas, document.body.firstChild);' +
       ' function lay(){ let sum = 0; for (const k of mas.children) sum += k.offsetHeight; mas.style.height = Math.ceil(sum / 3 + 8) + "px"; }' +
-      ' lay(); window.addEventListener("resize", lay); return true; })()');
+      ' lay(); window.addEventListener("resize", lay);' +
+      // 贡献图（GitHub 式）：绝对定位的星期标签贴在 11px 高的行上、bottom 锚定，译文换行会向上长出、压住上面几行；
+      // 对照：紧贴按钮弹出的菜单本来就比按钮高，菜单项译文照常显示
+      ' const cal = document.createElement("div"); cal.id = "e2e-cal"; cal.style.cssText = "font:12px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif";' +
+      ' cal.innerHTML = \'<table style="width:auto;border-spacing:4px;border-collapse:separate;margin:0"><tbody>\' + ["Mon", "", "Wed"].map(function(d){ return \'<tr style="height:11px"><td style="position:relative;width:29px;min-width:29px;max-width:29px;padding:0;border:0;font-size:12px;line-height:1.5"><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">\' + d + \'day</span><span aria-hidden="true" style="position:absolute;bottom:-4px">\\n \' + d + \'\\n</span></td><td style="width:11px;padding:0;border:0;background:#ccc"></td></tr>\'; }).join("") + "</tbody></table>" +' +
+      '   \'<div style="position:relative;display:inline-block;height:24px"><button>Menu</button><ul id="e2e-pop" style="position:absolute;top:0;left:0;margin:0;padding:4px;list-style:none;background:#eee"><li>Edit profile</li><li>Copy link</li><li>Delete post</li></ul></div>\';' +
+      ' document.body.insertBefore(cal, document.body.firstChild); return true; })()');
 
     const trigger = await cdp.evalIn(optSession, '(async () => { const tabs = await chrome.tabs.query({ url: "' + MOCK + '/*" }); if (!tabs.length) return { error: "no tab" }; const r = await chrome.runtime.sendMessage({ type: "wpt:inject", tabId: tabs[0].id, toggle: true }); return { tabId: tabs[0].id, r }; })()');
     check('内容脚本注入', trigger && trigger.r && trigger.r.ok, JSON.stringify(trigger));
@@ -151,6 +157,10 @@ async function main() {
       ' return t.style.display + (Math.abs(r.top - s.top) < s.height ? ":same-line" : ":below"); }' +
       ' return { flair: chk("#e2e-flair"), sort: chk("#e2e-sort", "span") }; })()');
     check('块之间的短文字、行内块里的短标签：译文在同一行', sameLine.flair === 'inline:same-line' && sameLine.sort === 'inline:same-line', JSON.stringify(sameLine));
+    const cal = await cdp.evalIn(pageSession, '(function(){ const sp = [...document.querySelectorAll("#e2e-cal td > span[aria-hidden]")]; const td = sp[0].parentElement.getBoundingClientRect(), r = sp[0].getBoundingClientRect();' +
+      ' return { inLabel: document.querySelectorAll("#e2e-cal table .wpt-translation").length, titles: sp.map(function(s){ return s.title; }).join("/"),' +
+      ' top: Math.round(td.top - r.top), menu: document.querySelectorAll("#e2e-pop .wpt-translation").length }; })()');
+    check('绝对定位的小标签：译文放不下改为悬停提示，标签不长出格子；弹出菜单照常翻译', cal.inLabel === 0 && /[\u4e00-\u9fff]/.test(cal.titles) && cal.top < 8 && cal.menu === 3, JSON.stringify(cal));
     check('横向导航：短标签译文行内同一行，放不下的撤掉', menu[0] === 'inline:same-line' && menu[1] === 'inline:same-line' && menu[2] === 'none', JSON.stringify(menu));
 
     const stats = await httpJson(MOCK + '/__stats');
