@@ -170,3 +170,19 @@ test('手动注入时自动与手动同时触发：只扫描一次，按手动�
   assert.equal(b.collects, 1);
   assert.ok(b.toasts.includes(NOTHING), '手动请求接管后应恢复提示');
 });
+
+test('语言过滤：父容器标了 lang="zh-CN" 但文本是纯英文时照常翻译；真正的中文段落仍跳过', async () => {
+  const mkEl = (lang) => Object.assign(fakeNode(), {
+    closest: (sel) => (sel === '[lang]' ? { getAttribute: () => lang } : null)
+  });
+  const units = [
+    { id: 1, el: mkEl('zh-CN'), text: 'English post inside a Chinese UI shell', kind: 'full', anchorNode: null },
+    { id: 2, el: mkEl('zh-CN'), text: '这是一条真正的中文内容', kind: 'full', anchorNode: null }
+  ];
+  const page = loadPage({ host: 'app.example.com', settings: { autoTranslate: false, targetLang: 'zh-CN', skipTargetLang: true }, units });
+  page.send({ type: 'wpt:start' });
+  await settle(page);
+  assert.equal(page.ports.length, 1);
+  const sent = Array.from(page.ports[0].messages[0].items, (x) => x.text);
+  assert.deepEqual(sent, ['English post inside a Chinese UI shell']);
+});

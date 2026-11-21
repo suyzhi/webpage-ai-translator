@@ -131,7 +131,12 @@ async function main() {
       + '<p>Use the operators <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="notranslate">-</code> and <span translate="no">*</span> for arithmetic.</p>'
       + '<p><span class="notranslate">BrandOnlyName Widget</span></p>'
       + '<a href="#" style="display:block;font-size:0">Zero size card title<span style="font-size:14px"> but this child is readable</span></a>'
-      + '<ul style="font-size:0"><li style="display:inline-block;font-size:16px">Inline block reset item text</li></ul>';
+      + '<ul style="font-size:0"><li style="display:inline-block;font-size:16px">Inline block reset item text</li></ul>'
+      + '<dialog open><p>Open dialog modal text must be extracted.</p></dialog>'
+      + '<dialog><p>Closed dialog text must stay hidden.</p></dialog>'
+      + '<div class="highlight"><p>Editorial highlight callout without pre block.</p></div>'
+      + '<article class="has-katex"><p>Article wrapped with has-katex class.</p></article>'
+      + '<h2 style="display:flex;align-items:center;gap:6px"><span>●</span>Flex Heading</h2>';
     const edge = await cdp.evalIn(session, HEAD +
       'document.body.textContent = ""; document.body.innerHTML = ' + JSON.stringify(edgeHtml) + ';' +
       'const units = NS.Extractor.collect(document.body, NS.settings.forContent(NS.settings.normalize({ targetLang: "zh-CN" })));' +
@@ -157,6 +162,11 @@ async function main() {
       ' hasHlCard: texts.some(function(t){ return t.indexOf("Monthly current events") >= 0; }),' +
       ' ops: texts.filter(function(t){ return t.indexOf("Use the operators") >= 0; })[0],' +
       ' hasBrandOnly: texts.some(function(t){ return t.indexOf("BrandOnlyName") >= 0; }),' +
+      ' hasOpenDialog: texts.some(function(t){ return t.indexOf("Open dialog modal") >= 0; }),' +
+      ' hasClosedDialog: texts.some(function(t){ return t.indexOf("Closed dialog text") >= 0; }),' +
+      ' hasEditorialHl: texts.some(function(t){ return t.indexOf("Editorial highlight callout") >= 0; }),' +
+      ' hasKatexWrap: texts.some(function(t){ return t.indexOf("Article wrapped with has-katex") >= 0; }),' +
+      ' hasFlexHeading: texts.some(function(t){ return t.indexOf("Flex Heading") >= 0; }),' +
       ' zero: texts.filter(function(t){ return /Zero size card|child is readable|Inline block reset/.test(t); }) }; })()');
     check('display:none 被跳过', !edge.hasHidden, JSON.stringify(edge.texts));
     check('visibility:hidden 被跳过', !edge.hasInvisible);
@@ -179,6 +189,8 @@ async function main() {
       edge.zero.some(function (t) { return /child is readable/.test(t); }) && edge.zero.some(function (t) { return /Inline block reset/.test(t); }), JSON.stringify(edge.zero));
     check('源码换行在 white-space:normal 下按空格处理，pre-line 下保留', edge.collapsedNl === 'Collapsed source newline, still one visual line.' &&
       edge.keptNl === 'Kept newline first line\nsecond line.', JSON.stringify([edge.collapsedNl, edge.keptNl]));
+    check('打开的 <dialog open> 正常抽取，关闭的 <dialog> 跳过', edge.hasOpenDialog && !edge.hasClosedDialog);
+    check('非代码 .highlight 提示框、.has-katex 外壳、横排 flex 标题均正常抽取', edge.hasEditorialHl && edge.hasKatexWrap && edge.hasFlexHeading);
 
     // 4) Shadow DOM：open 影子根、嵌套影子根、具名 slot 投影的宿主子元素
     const shadow = await cdp.evalIn(session, HEAD +

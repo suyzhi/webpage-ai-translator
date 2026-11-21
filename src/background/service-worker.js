@@ -46,7 +46,7 @@ importScripts(
     if (jobs.size === 0 && keepAlive) { clearInterval(keepAlive); keepAlive = null; }
   }
 
-  async function ensureContent(tabId) {
+  async function ensureContent(tabId, tabUrl) {
     try {
       const r = await chrome.tabs.sendMessage(tabId, { type: NS.MSG.PING }, { frameId: 0 });
       if (r && r.ok) return { ok: true, injected: false };
@@ -59,14 +59,29 @@ importScripts(
       });
       return { ok: true, injected: true };
     } catch (e) {
-      return { ok: false, error: friendlyInjectError(e) };
+      let url = tabUrl || '';
+      if (!url && chrome.tabs && typeof chrome.tabs.get === 'function') {
+        try { const t = await chrome.tabs.get(tabId); url = (t && t.url) || ''; } catch (e2) {}
+      }
+      return { ok: false, error: friendlyInjectError(e, url) };
     }
   }
 
-  function friendlyInjectError(e) {
+  function friendlyInjectError(e, url) {
     const m = String((e && e.message) || e || '');
-    if (/gallery|chrome\.google\.com/i.test(m)) return '无法在扩展商店页面上运行';
-    if (/chrome:\/\/|edge:\/\//i.test(m)) return '无法在浏览器内部页面上运行';
+    const u = String(url || '');
+    if (/^file:\/\//i.test(u) || /file:\/\//i.test(m)) {
+      return '无法访问本地文件：请在扩展管理页开启「允许访问文件网址」后刷新重试';
+    }
+    if (/\.pdf([?#]|$)/i.test(u) || /mhjfbmdgcfjbbpaeojofohoefgiehjai/i.test(u)) {
+      return '暂不支持直接翻译浏览器内置 PDF 预览页';
+    }
+    if (/gallery|chrome\.google\.com|chromewebstore\.google\.com|microsoftedge\.microsoft\.com\/addons/i.test(m + ' ' + u)) {
+      return '无法在扩展商店页面上运行';
+    }
+    if (/^(?:chrome|edge|about|view-source|devtools|chrome-extension|edge-extension):/i.test(u) || /chrome:\/\/|edge:\/\//i.test(m)) {
+      return '无法在浏览器内部页面上运行';
+    }
     if (/Cannot access|not allowed|Missing host permission/i.test(m)) return '无权访问此页面，请刷新页面后重试';
     return '注入失败：' + U.truncate(m, 120);
   }
@@ -81,9 +96,14 @@ importScripts(
 
   async function toggleInTab(tab) {
     if (!tab || tab.id == null) return;
-    const res = await ensureContent(tab.id);
-    if (!res.ok) return;
-    try { await chrome.tabs.sendMessage(tab.id, manualMessage(res)); } catch (e) {}
+    const res = await ensureContent(tab.id, tab.url);
+    if (!res.ok) {
+      // 快捷键 / 右键触发失败时用红色角标提示，避免完全无反应
+      setBadge(tab.id, '!', '#dc2626');
+      setTimeout(function () { setBadge(tab.id, ''); }, 3500);
+      return;
+    }
+    try { await chrome.tabs.sendMessage(tab.id, manualMessage(res), { frameId: 0 }); } catch (e) {}
   }
 
   /* ---------------- 累计用量（持久化，串行读改写，避免并发请求互相覆盖） ---------------- */
@@ -261,9 +281,9 @@ importScripts(
           case NS.MSG.INJECT: {
             const tabId = msg.tabId != null ? msg.tabId : (sender.tab && sender.tab.id);
             if (tabId == null) return sendResponse({ ok: false, error: '没有可用的标签页' });
-            const res = await ensureContent(tabId);
+            const res = await ensureContent(tabId, msg.url || (sender.tab && sender.tab.url));
             if (res.ok && msg.toggle) {
-              try { await chrome.tabs.sendMessage(tabId, manualMessage(res)); } catch (e) {}
+              try { await chrome.tabs.sendMessage(tabId, manualMessage(res), { frameId: 0 }); } catch (e) {}
             }
             return sendResponse(res);
           }
@@ -280,6 +300,20 @@ importScripts(
             }
             try { await chrome.tabs.sendMessage(tabId, { type: 'wpt:frame-cmd', action: msg.action, overrides: msg.overrides || null }); } catch (e) {}
             return sendResponse({ ok: true, injected: injected });
+          }
+          case 'wpt:frame-status': {
+            // 子框架上报翻译状态给顶层页面（用于 frameset / iframe 为主体的页面）
+            const tabId = sender.tab && sender.tab.id;
+            if (tabId == null || !sender.frameId) return sendResponse({ ok: false });
+            try {
+              await chrome.tabs.sendMessage(tabId, {
+                type: 'wpt:frame-status',
+                frameId: sender.frameId,
+                active: !!msg.active,
+                translated: msg.translated || 0
+              }, { frameId: 0 });
+            } catch (e) {}
+            return sendResponse({ ok: true });
           }
           case NS.MSG.CACHE_CLEAR:
             await cache.load();

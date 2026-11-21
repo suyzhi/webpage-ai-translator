@@ -360,3 +360,38 @@ test('plan：行内级元素（按钮组拆出的单个按钮）短文本 -> 行
   const para = attach(el('div'), el('p'));
   assert.equal(R.create(para, '译文', {}, R.plan(unitOf(para), true)).style.margin, '0');
 });
+
+test('clipBox：内部可滚动容器（overflow-y:auto）不算定高裁切，overflow:hidden 仍判裁切', () => {
+  const scroller = el('main', { display: 'block', overflowX: 'visible', overflowY: 'auto' });
+  scroller.scrollHeight = 2000;
+  scroller.clientHeight = 800;
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, right: 1000, width: 1000, height: 800 });
+  const p = attach(scroller, el('p', { display: 'block' }));
+  p.getBoundingClientRect = () => ({ top: 750, bottom: 840, left: 20, right: 900, width: 880, height: 90 });
+  const tr = attach(p, el('wpt-t', { display: 'block' }));
+  tr.getBoundingClientRect = () => ({ top: 795, bottom: 840, left: 20, right: 900, width: 880, height: 45 });
+  assert.equal(R.clipBox(tr, p), null, '滚动容器下方的内容可滚动看到，不应判为裁切');
+
+  scroller._computed.overflowY = 'hidden';
+  assert.equal(R.clipBox(tr, p), scroller, 'overflow:hidden 超出底边仍判为裁切');
+});
+
+test('plan：font-size:0 容器内含可见字号子元素时复制子元素排版，避免译文不可见', () => {
+  const a = el('a', { display: 'block', fontSize: '0px' });
+  txt(a, 'Zero size hidden card title text');
+  const span = attach(a, el('span', { display: 'inline', fontSize: '15px', color: 'rgb(10, 20, 30)' }));
+  span.textContent = 'Visible subtitle';
+  a.querySelectorAll = () => [span];
+  const pl = R.plan(unitOf(a, 'Visible subtitle that should inherit non-zero font size'));
+  assert.equal(pl.typo, span);
+});
+
+test('plan：XHTML 小写 tagName（ul / li）同样识别刚性父级', () => {
+  const ul = el('ul');
+  ul.tagName = 'ul';
+  const li = attach(ul, el('li', { display: 'flex', flexDirection: 'row' }));
+  li.tagName = 'li';
+  const a = attach(li, el('span')); a.textContent = 'first part of item';
+  const b = attach(li, el('span')); b.textContent = 'second part of it';
+  assert.equal(R.plan(unitOf(li, 'first part of item second part of it, long enough')).mode, 'end');
+});

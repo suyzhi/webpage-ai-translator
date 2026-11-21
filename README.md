@@ -251,6 +251,9 @@ npm run test:social
 # 也可对真实公开页面做冒烟（边滚动边观察）：
 node tools/e2e-social.mjs --url https://mastodon.social/explore --lang en-US
 
+# 特殊网页兼容性（Trusted Types、XHTML、frameset、srcdoc/about:blank iframe、text/plain、内部滚动、动态显现、closed Shadow DOM）
+npm run test:compat
+
 # 微基准：缓存读写与文本扫描热点
 npm run bench
 
@@ -263,7 +266,7 @@ LRU 淘汰、提示词构造与三级解析、HTTP 错误分类、**渲染与插
 （内部放置 / 横排容器主体子元素 / 短标签行内 / 截断元素外置 / 仅译文隐藏与还原），以及**完整引擎链路**
 （去重 / 缓存命中 / 批量 / 429 重试与不拆分 / 400 拆分 / 401 快停 / 网络失败降级 / 缓存跨实例持久化 /
 共享限流 / 增量追加 / 响应体卡住超时），以及**网站规则**（域名清洗 / 子域名继承与优先级 / 内容脚本注册参数 / 内容脚本启动判定）。
-此外七个真实浏览器回归脚本：`npm run test:lazy`（按需翻译、流式改写、用量统计、按网站自动翻译）、`npm run test:frames`（iframe 翻译）、`npm run test:social`（社交媒体场景）、`npm run test:dynamic`（动态内容与高并发）、`npm run test:e2e`（加载扩展跑通翻译全链路）、
+此外八个真实浏览器回归脚本：`npm run test:compat`（特殊网页兼容性）、`npm run test:lazy`（按需翻译、流式改写、用量统计、按网站自动翻译）、`npm run test:frames`（iframe 翻译）、`npm run test:social`（社交媒体场景）、`npm run test:dynamic`（动态内容与高并发）、`npm run test:e2e`（加载扩展跑通翻译全链路）、
 `npm run test:extract`（抽取阶段压力与边界）、`npm run test:ui`（popup/options 布局与保存链路）。
 
 手工验证页面：
@@ -284,7 +287,7 @@ tests/      wpt.test.mjs engine.test.mjs render.test.mjs content.test.mjs
 demo/       test-page.html showcase.html showcase-dict.json social.html frames.html zh-page.html
 docs/       screenshots/ 效果截图
 tools/      make-icons.mjs mock-ai-server.mjs bench.mjs
-            e2e-headless.mjs e2e-extract.mjs e2e-ui.mjs e2e-dynamic.mjs e2e-social.mjs lib/cdp.mjs
+            e2e-headless.mjs e2e-extract.mjs e2e-ui.mjs e2e-dynamic.mjs e2e-social.mjs e2e-lazy.mjs e2e-frames.mjs e2e-compat.mjs lib/cdp.mjs
 ```
 
 ---

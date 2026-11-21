@@ -18,7 +18,7 @@
     err.badModel = (status === 400 || status === 404) && MODEL_ERR_RE.test(detail || '');
     err.retryable = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
     err.fatal = status === 401 || status === 402 || status === 403 || status === 404 || status === 422 || err.badModel;
-    err.split = (status === 400 || status === 413) && !err.badModel;   // 常见于上下文过长 -> 拆分后重试
+    err.split = (status === 400 || status === 413 || status === 451) && !err.badModel;   // 常见于上下文过长 / 单段内容审核 -> 拆分后重试
     const ra = headers && typeof headers.get === 'function' ? headers.get('retry-after') : null;
     if (ra) {
       const sec = Number(ra);

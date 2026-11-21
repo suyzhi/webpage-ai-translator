@@ -85,7 +85,7 @@
     return new Promise(function (resolve) {
       if (tabId == null) return resolve(null);
       try {
-        chrome.tabs.sendMessage(tabId, { type: NS.MSG.PING }, function (resp) {
+        chrome.tabs.sendMessage(tabId, { type: NS.MSG.PING }, { frameId: 0 }, function (resp) {
           if (chrome.runtime.lastError || !resp) return resolve(null);
           resolve(resp);
         });
@@ -100,13 +100,13 @@
   }
 
   async function ensureInjected() {
-    const resp = await chrome.runtime.sendMessage({ type: NS.MSG.INJECT, tabId: tab.id });
+    const resp = await chrome.runtime.sendMessage({ type: NS.MSG.INJECT, tabId: tab.id, url: tab.url || '' });
     return resp || { ok: false, error: '注入失败' };
   }
 
   async function retranslate() {
-    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {});
-    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
+    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }, { frameId: 0 }).catch(function () {});
+    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }, { frameId: 0 }).catch(function () {});
     $('mainBtn').textContent = '分析中…';
     setTimeout(refresh, 300);
   }
@@ -115,7 +115,7 @@
     if (!tab || tab.id == null) return;
     const st = live && live.status;
     if (BUSY[st]) {
-      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.STOP }).catch(function () {});
+      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.STOP }, { frameId: 0 }).catch(function () {});
       refresh();
       return;
     }
@@ -123,7 +123,7 @@
     // 失败段落重试 / 停止或出错后继续：不还原，只补翻剩余部分
     const resume = (live && live.failed > 0) || ((st === 'idle' || st === 'error') && hasOutput);
     if (resume) {
-      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
+      await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }, { frameId: 0 }).catch(function () {});
       setTimeout(refresh, 300);
       return;
     }
@@ -138,14 +138,14 @@
       render();
       return;
     }
-    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }).catch(function () {});
+    await chrome.tabs.sendMessage(tab.id, { type: NS.MSG.START, overrides: overrides() }, { frameId: 0 }).catch(function () {});
     $('mainBtn').textContent = '分析中…';
     setTimeout(refresh, 300);
   }
 
   function onRestore() {
     if (!tab || tab.id == null) return;
-    chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }).catch(function () {}).then(function () { refresh(); });
+    chrome.tabs.sendMessage(tab.id, { type: NS.MSG.RESTORE }, { frameId: 0 }).catch(function () {}).then(function () { refresh(); });
   }
 
   function overrides() {

@@ -19,7 +19,8 @@
   if (NS.Engine) return;
   const U = NS.util;
 
-  const MAX_SPLIT_DEPTH = 3;
+  // 默认批次上限 64（最大 120），深度 7（2^7=128）可把整批里唯一触发审核 / 异常的 1 段隔离出来，避免连累相邻 8 段
+  const MAX_SPLIT_DEPTH = 7;
   const RATE_LIMIT_EXTRA_RETRIES = 4;   // 429 额外重试次数（冷却由共享限流器统一处理）
 
   /* 限流器按「供应商 + 端点 + 密钥」共享；密钥只参与哈希，不以明文作为键保存 */
@@ -317,13 +318,19 @@
     pending = pending.filter(notDone);
     if (this.stopped || !pending.length) return;
 
-    // 二分拆分：只对「内容相关」的失败有意义（格式错误 / 缺片段 / 上下文超限 / 超时）；
+    // 二分拆分：只对「内容相关」的失败有意义（格式错误 / 缺片段 / 上下文超限 / 内容审核 / 超时）；
     // 限流、网络、服务端 5xx 拆分只会成倍放大请求量。
     const splittable = !lastErr || lastErr.malformed || lastErr.split || lastErr.name === 'TimeoutError' ||
       (!lastErr.status && !lastErr.network);
     if (splittable && pending.length > 1 && depth < MAX_SPLIT_DEPTH) {
       const mid = Math.ceil(pending.length / 2);
+      const beforeOk = this.stats.done - this.stats.failed;
       await this.translateBatch(pending.slice(0, mid), depth + 1);
+      // 防止系统性 400（所有段均失败）拆分出 O(N) 请求风暴：至少 4 段的左半批一条未成则不再继续拆分右半批
+      if (mid >= 4 && this.stats.done - this.stats.failed === beforeOk) {
+        for (let i = mid; i < pending.length; i++) this.pushFailed(pending[i], lastErr);
+        return;
+      }
       await this.translateBatch(pending.slice(mid), depth + 1);
       return;
     }

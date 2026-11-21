@@ -801,3 +801,32 @@ test('术语表：默认关闭；关闭或候选太少时不发术语表请求�
   await runEngine(GLOSSARY_ON, TERM_ITEMS, { terms: TERMS.slice(0, 1) });
   assert.ok(calls.every((c) => !/^You fix/.test(sysOf(c))));
 });
+
+test('大批量拆分自愈：64 段中仅 1 段触发 400/451 内容审核时精准隔离该段，其余 63 段全部成功', async () => {
+  const calls = makeFetch((c) => {
+    const segs = segmentsOf(c);
+    if (segs.some((s) => s.text.includes('BLOCKED_SEGMENT'))) {
+      return { __httpError: 451, message: 'Content safety filter triggered' };
+    }
+    return echoTranslator()(c);
+  });
+  const items = Array.from({ length: 64 }, (_, i) => ({
+    id: i + 1,
+    text: i === 41 ? 'This single BLOCKED_SEGMENT triggers moderation.' : 'Clean paragraph number ' + i + ' should translate.'
+  }));
+  const settings = isolated('split64', { batchItems: 64, batchChars: 8000, firstBatchChars: 8000, maxRetries: 0, useCache: false });
+  const { results, stats, engine } = await runEngine(settings, items);
+  assert.equal(results.length, 63, '除被拦的 1 段外其余 63 段均应成功');
+  assert.equal(stats.failed, 1);
+  assert.deepEqual(engine.failedIds, [42]);
+  assert.ok(calls.length < 20, '二分隔离只应发出 O(log N) 次请求，实际 ' + calls.length);
+});
+
+test('大批量拆分防护：所有段均触发 400 系统性错误时不产生 O(N) 请求风暴', async () => {
+  const calls = makeFetch(() => ({ __httpError: 400, message: 'invalid parameter xyz' }));
+  const items = Array.from({ length: 64 }, (_, i) => ({ id: i + 1, text: 'Segment ' + i + ' systematic fail.' }));
+  const settings = isolated('sys400', { batchItems: 64, batchChars: 8000, firstBatchChars: 8000, maxRetries: 0, useCache: false });
+  const { stats } = await runEngine(settings, items);
+  assert.equal(stats.failed, 64);
+  assert.ok(calls.length <= 25, '系统性 400 应尽早止损，实际请求数 ' + calls.length);
+});

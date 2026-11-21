@@ -571,3 +571,14 @@ test('isReasoningModel：识别推理模型，不误伤普通对话模型', () =
   for (const m of ['deepseek-reasoner', 'deepseek-r1', 'o3-mini', 'openai/o1', 'gpt-5', 'qwq-32b', 'qwen3-235b-a22b-thinking-2507']) assert.equal(WPT.isReasoningModel(m), true, m);
   for (const m of ['deepseek-chat', 'gpt-4o-mini', 'gpt-5-chat-latest', 'claude-3-5-haiku-latest', 'glm-4-flash', 'llama-3.3-70b-versatile', '']) assert.equal(WPT.isReasoningModel(m), false, m);
 });
+
+test('hasTargetScript：校验非拉丁目标语言的书写系统，避免错误 lang 属性误杀英文', () => {
+  assert.equal(U.hasTargetScript('Hello world from an English article', 'zh-CN'), false);
+  assert.equal(U.hasTargetScript('今天天气真好', 'zh-CN'), true);
+  assert.equal(U.hasTargetScript('OpenAI 发布新模型', 'zh-CN'), true);
+  assert.equal(U.hasTargetScript('Hello world', 'ja'), false);
+  assert.equal(U.hasTargetScript('東京の天気', 'ja'), true);
+  assert.equal(U.hasTargetScript('Hello world', 'ko'), false);
+  assert.equal(U.hasTargetScript('안녕하세요', 'ko'), true);
+  assert.equal(U.hasTargetScript('Bonjour le monde', 'en'), true, '拉丁语系目标不做脚本排除');
+});

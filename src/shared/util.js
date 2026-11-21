@@ -235,6 +235,17 @@
     return c / total >= 0.6;
   };
 
+  /* 文本是否可能属于目标语言的书写系统（用于校验页面上的 lang 属性，防止 <div lang="zh-CN"> 误杀整页英文） */
+  U.hasTargetScript = function (text, langCode) {
+    const lang = NS.LANG_MAP && NS.LANG_MAP[langCode];
+    if (!lang || !lang.script || lang.script === 'latin') return true;
+    const s = String(text || '');
+    const test = SCRIPT_TEST[lang.script];
+    if (!test) return true;
+    if (lang.script === 'kana') return test.test(s) || SCRIPT_TEST.han.test(s);
+    return test.test(s);
+  };
+
   const NON_TRANSLATABLE_RE = /^(?:[\d\s\p{P}\p{S}]+|https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.]+)$/u;
   /* 社交媒体里的标识而非语句：@用户名 / #话题 / $股票代码，可多个并列 */
   /* 「显示名 @用户名」组合（X / Mastodon / Bluesky 的作者行） */

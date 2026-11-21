@@ -15,18 +15,23 @@
   if (NS.Extractor) return;
   const U = NS.util;
 
+  function tagOf(el) {
+    return el && el.tagName ? el.tagName.toUpperCase() : '';
+  }
+
   const HARD_SKIP_TAGS = new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'PRE', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
     'OPTGROUP', 'SVG', 'MATH', 'CANVAS', 'IFRAME', 'OBJECT', 'EMBED', 'VIDEO', 'AUDIO', 'MAP',
-    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'DIALOG', 'MJX-CONTAINER'
+    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'MJX-CONTAINER'
   ]);
 
   /* 这些行内元素不单独成单元，但其文本会并入所属块，避免句子被截断 */
   const INLINE_SOFT_SKIP = new Set(['CODE', 'KBD', 'SAMP', 'VAR', 'CITE', 'ABBR']);
 
-  // 代码高亮的 highlight 只认完整类名（Pygments / Rouge / GitHub 的 highlight、highlight-source-*），
-  // 不能按片段匹配：Reddit 的 community-highlight-card（精选帖卡片）是正文
-  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|mwe-math-element|blob-code|linenumber)([-_\s]|$)|(^|\s)(highlight|highlight-source-[\w-]+|highlighter-rouge)(\s|$)/i;
+  // katex / hljs 仅按完整类名匹配，避免文章外层标注 has-katex / katex-loaded / hljs-theme-dark 时误杀整篇正文；
+  // 裸 class="highlight" 常见于新闻 / 博客的重点提示框，只有确实包着代码块（<pre> / 行号）且不含正文段落时才跳过
+  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|monaco-editor|CodeMirror|cm-editor|ace_editor|mwe-math-element|blob-code|linenumber)([-_\s]|$)|(^|\s)(hljs|katex|katex-display|katex-mathml|katex-html|highlight-source-[\w-]+|highlighter-rouge)(\s|$)/i;
+  const PLAIN_HIGHLIGHT_RE = /(^|\s)highlight(\s|$)/i;
   // MathJax 渲染产物的类名区分大小写（MathJax / MathJax_Display）；小写的 "mathjax" 只是「本块含公式、待渲染」的标记，
   // 例如 arXiv 摘要 <blockquote class="abstract mathjax">，不能整块跳过
   const MATHJAX_CLASS_RE = /(^|\s)MathJax(_\w+)?(\s|$)/;
@@ -36,11 +41,46 @@
   const APP_SHELL_BLOCKS = 'p,li,h1,h2,h3,h4,article,section,blockquote,[role="article"]';
   const optOutCache = new WeakMap();
 
+  function isCodeHighlight(el, cls) {
+    if (!PLAIN_HIGHLIGHT_RE.test(cls)) return false;
+    const tag = tagOf(el);
+    if (tag === 'PRE' || tag === 'CODE') return true;
+    if (!el.querySelector) return false;
+    if (el.querySelector('p, h1, h2, h3, h4, article, blockquote')) return false;
+    return !!el.querySelector('pre, .linenos, .lineno');
+  }
+
+  /*
+   * 判断是否为包裹整页 / 应用主体的外壳容器（常见于 React / Vue / Next.js / 社交 / 办公应用）：
+   * 这类外壳常挂着 translate="no" / class="notranslate" / lang="zh-CN"（界面语言），
+   * 不能因此整页跳过；其内部具体元素上的声明仍然生效。
+   */
+  function isAppShell(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el === document.body || el === document.documentElement) return true;
+    const textLen = (el.textContent || '').trim().length;
+    if (textLen > 200 && el.querySelectorAll && el.querySelectorAll(APP_SHELL_BLOCKS).length >= 3) return true;
+    // 全 div 结构的现代 SPA（无 <p>/<li>/<article>）：多块子容器或占据整页主体文本
+    if (textLen > 200 && el.childElementCount >= 3) return true;
+    if (textLen >= 100 && el.childElementCount >= 2 && document.body) {
+      const bodyLen = (document.body.textContent || '').trim().length;
+      if (bodyLen > 0 && textLen >= bodyLen * 0.6) return true;
+    }
+    const hasShadow = !!shadowOf(el);
+    if (hasShadow || textLen > 120) {
+      try {
+        const r = el.getBoundingClientRect();
+        const vw = globalThis.innerWidth || 1000;
+        const vh = globalThis.innerHeight || 700;
+        if (r.width >= vw * 0.5 && r.height >= vh * 0.35 && (hasShadow || el.childElementCount >= 2 || textLen > 200)) return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
   /*
    * 页面声明「不要翻译」（translate="no" / class="notranslate"）：
-   * 对具体元素（代码、人名、某一段）照常尊重；但 React/Vue 应用常把它挂在整个应用根节点上，
-   * 目的只是阻止浏览器自带翻译改写 DOM —— 此时整页都会被跳过（如 Mastodon）。
-   * 因此对「装着整页段落的外壳容器」忽略该声明，其内部更具体的声明仍然生效。
+   * 对具体元素（代码、人名、某一段）照常尊重；对外壳容器忽略，避免整页无法翻译。
    */
   function optsOut(el) {
     const cls = el.className;
@@ -50,9 +90,7 @@
     if (!flagged) return false;
     let v = optOutCache.get(el);
     if (v === undefined) {
-      const shell = el === document.body || el === document.documentElement ||
-        ((el.textContent || '').length > 600 && !!el.querySelectorAll && el.querySelectorAll(APP_SHELL_BLOCKS).length >= 3);
-      v = !shell;
+      v = !isAppShell(el);
       optOutCache.set(el, v);
     }
     return v;
@@ -60,21 +98,28 @@
 
   const TABLE_STRUCT = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP', 'UL', 'OL', 'DL', 'SELECT', 'MENU']);
   const CELL_LIKE = new Set(['TD', 'TH', 'LI', 'DT', 'DD', 'CAPTION', 'SUMMARY', 'FIGCAPTION']);
+  const CONTENT_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'LI', 'TD', 'TH', 'DD', 'DT', 'FIGCAPTION', 'SUMMARY', 'BLOCKQUOTE']);
+  /* HTML 规范允许挂载 ShadowRoot 的标准标签（避免对 SVG / SCRIPT 等调用 chrome.dom 抛异常） */
+  const SHADOW_HOST_TAGS = new Set([
+    'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BODY', 'DIV', 'FOOTER',
+    'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'MAIN', 'NAV', 'P', 'SECTION', 'SPAN'
+  ]);
 
   const MAX_UNITS = 5000;
-  const MAX_DEPTH = 80;
+  const MAX_DEPTH = 200;
+  const MAX_HIDDEN_TRACK = 500;
   const INLINE_BLOCK_MIN_TEXT = 20;   // 视觉长度阈值（约 10 个汉字 / 20 个西文字符）
 
   function isHardSkip(el) {
-    const tag = el.tagName;
+    const tag = tagOf(el);
     if (HARD_SKIP_TAGS.has(tag)) return true;
     if (el.hasAttribute && el.hasAttribute('data-wpt')) return true;
     if (el.isContentEditable) return true;
-    if (optsOut(el)) return true;
     const cls = el.className;
-    if (typeof cls === 'string' && cls && (SKIP_CLASS_RE.test(cls) || MATHJAX_CLASS_RE.test(cls))) return true;
+    if (typeof cls === 'string' && cls && (SKIP_CLASS_RE.test(cls) || MATHJAX_CLASS_RE.test(cls) || isCodeHighlight(el, cls))) return true;
     const id = el.id;
     if (typeof id === 'string' && id && SKIP_ID_RE.test(id)) return true;
+    if (optsOut(el)) return true;
     return false;
   }
 
@@ -136,7 +181,7 @@
    */
   const SEPARATE_TAGS = new Set(['A', 'BUTTON', 'LABEL', 'IMG']);
   function separate(el) {
-    if (SEPARATE_TAGS.has(el.tagName)) return true;
+    if (SEPARATE_TAGS.has(tagOf(el))) return true;
     try { return getComputedStyle(el).display !== 'inline'; } catch (e) { return false; }
   }
   function pushGap(out, prev, n) {
@@ -153,7 +198,7 @@
     if (!lightOnly && node.nodeType === 1) {
       const sr = shadowOf(node);
       if (sr) return sr.childNodes;
-      if (node.tagName === 'SLOT') {
+      if (tagOf(node) === 'SLOT') {
         const assigned = node.assignedNodes({ flatten: true });
         if (assigned.length) return slots ? assigned : [];
       }
@@ -182,7 +227,7 @@
   const VERBATIM = '\u2063';                 // 标记原样保留的片段，建单元时据此判断「除此之外还有没有要翻的字」
   const VERBATIM_RE = /\u2063[^\u2063]*\u2063/g;
   function keepVerbatim(n) {
-    if (HARD_SKIP_TAGS.has(n.tagName) || !optsOut(n)) return false;
+    if (HARD_SKIP_TAGS.has(tagOf(n)) || !optsOut(n)) return false;
     const t = n.textContent || '';
     if (!t.trim() || t.length > 200) return false;
     let cs = null;
@@ -209,12 +254,12 @@
         continue;
       }
       if (n.nodeType !== 1) continue;
-      if (n.tagName === 'BR') { out.push('\n'); prev = n; continue; }
+      if (tagOf(n) === 'BR') { out.push('\n'); prev = n; continue; }
       if (isHardSkip(n)) {
         if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); prev = n; }
         continue;
       }
-      if (depth < 40 && !isVisible(n)) continue;
+      if (depth < 80 && !isVisible(n)) continue;
       pushGap(out, prev, n);
       collectText(n, out, depth + 1, slots || !!shadowOf(n), false);
       prev = n;
@@ -234,7 +279,7 @@
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       if (n.nodeType === 3) { if (n.nodeValue && !mute) out.push(textValue(n)); }
-      else if (n.tagName === 'BR') out.push('\n');
+      else if (tagOf(n) === 'BR') out.push('\n');
       else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
       else if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); }
       prev = n;
@@ -243,17 +288,22 @@
   }
 
   /*
-   * 横向排列的 flex/grid「UI 条」：导航条、工具栏、带图标的品牌名等。
-   * 其内容都是短标签，且插入块级译文会变成新的 flex item 打乱整行布局，
-   * 因此整条跳过（纵向排列的 flex 容器不受影响，插入新块是安全的）。
+   * 页眉 / 工具栏里横向排列的极短品牌 / 图标条（如 <header><span class="brand"><i></i>Lingua</span></header>）：
+   * 仅跳过位于页眉/导航/工具栏里的极短横排 flex/多列 grid 标签，不再误杀正文里的 flex 标题、侧栏链接与列表项。
    */
-  function isUiStrip(cs, text) {
+  const STRIP_ANCESTOR_SEL = 'header,nav,[role="banner"],[role="toolbar"]';
+  function isUiStrip(el, cs, text) {
     if (!cs) return false;
+    if (el && CONTENT_TAGS.has(tagOf(el))) return false;
     const d = cs.display || '';
-    if (d.indexOf('flex') < 0 && d.indexOf('grid') < 0) return false;
-    const dir = cs.flexDirection || 'row';
-    if (dir.indexOf('column') === 0) return false;
-    return U.visualLength(text) < 40;
+    const isFlex = d.indexOf('flex') >= 0 && String(cs.flexDirection || 'row').indexOf('column') !== 0;
+    const isMultiGrid = d.indexOf('grid') >= 0 && (function () {
+      const cols = String(cs.gridTemplateColumns || 'none').trim();
+      return cols !== 'none' && cols.split(/\s+/).length > 1;
+    })();
+    if (!isFlex && !isMultiGrid) return false;
+    if (U.visualLength(text) > 12) return false;
+    return !!(el && el.closest && el.closest(STRIP_ANCESTOR_SEL));
   }
 
   /*
@@ -270,8 +320,8 @@
       const n = list[i];
       if (n.nodeType === 3) { if (/[\p{L}\p{N}]/u.test(n.nodeValue || '')) return null; continue; }
       if (n.nodeType !== 1 || isHardSkip(n) || !isVisible(n)) continue;
-      if (n.tagName === 'BR') continue;
-      let ok = CONTROL_TAGS.has(n.tagName);
+      if (tagOf(n) === 'BR') continue;
+      let ok = CONTROL_TAGS.has(tagOf(n));
       if (!ok) {
         const d = getComputedStyle(n).display;
         ok = d === 'inline-block' || d === 'inline-flex';
@@ -295,8 +345,9 @@
     for (let c = el, d = 0; c && d < 5; c = c.parentElement, d++) {
       const role = c.getAttribute && c.getAttribute('role');
       const cls = typeof c.className === 'string' ? c.className : '';
-      if (c.tagName === 'BUTTON' || (role && CONTROL_ROLES.has(role)) ||
-          (c.tagName === 'A' && BUTTON_CLASS_RE.test(cls))) { ctl = c; break; }   // <a class="button"> 样式的按钮
+      const t = tagOf(c);
+      if (t === 'BUTTON' || (role && CONTROL_ROLES.has(role)) ||
+          (t === 'A' && BUTTON_CLASS_RE.test(cls))) { ctl = c; break; }   // <a class="button"> 样式的按钮
     }
     if (!ctl) return false;
     return U.visualLength(ctl.textContent || text) <= 28;
@@ -342,39 +393,60 @@
   }
 
   /*
-   * 影子树（Web Components：MSN、Salesforce、Reddit 的 shreddit-*）：open 直接可读；
-   * closed 只能用扩展专用的 chrome.dom API，且只有自定义元素（标签名带连字符）才值得查，避免逐元素调用。
+   * 影子树（Web Components：MSN、Salesforce、Reddit 的 shreddit-*，以及挂载 closed 影子根的常规容器 div/section 等）：
+   * open 直接可读；closed 经扩展专用的 chrome.dom API 读取（只对自定义元素或规范允许挂载影子根的 HTML 容器元素调用）。
    */
   const DOM_API = globalThis.chrome && chrome.dom && typeof chrome.dom.openOrClosedShadowRoot === 'function'
     ? chrome.dom.openOrClosedShadowRoot : null;
   function shadowOf(el) {
+    if (!el || el.nodeType !== 1) return null;
     if (el.shadowRoot) return el.shadowRoot;
-    if (DOM_API && el.tagName.indexOf('-') > 0) { try { return DOM_API(el) || null; } catch (e) { /* 忽略 */ } }
+    if (!DOM_API) return null;
+    const tag = tagOf(el);
+    if (tag.indexOf('-') > 0 || (SHADOW_HOST_TAGS.has(tag) && (!el.firstChild || el.childElementCount > 0))) {
+      try { return DOM_API(el) || null; } catch (e) { /* 非 HTMLElement 等忽略 */ }
+    }
     return null;
   }
 
   /*
    * 自定义元素默认 display:inline，组件作者常常不写 :host{display:block}；
-   * 影子树第一层里有块级内容（卡片、列表）的宿主按容器处理，否则会被当成一段行内文字整块拼接。
+   * 影子树里有块级内容（含嵌套自定义元素 / display:contents 包装层）的宿主按容器处理，
+   * 否则整棵组件树会被当成一段行内文字拼成一个巨段甚至漏翻。
    */
-  function hostOfBlocks(el) {
+  function hostOfBlocks(el, depth) {
+    if ((depth || 0) > 6) return false;
     const sr = shadowOf(el);
     if (!sr) return false;
+    return treeHasBlocks(sr, (depth || 0) + 1);
+  }
+
+  function treeHasBlocks(root, depth) {
+    if (depth > 6) return false;
     let i = 0;
-    for (let c = sr.firstElementChild; c && i < 30; c = c.nextElementSibling, i++) {
-      if (HARD_SKIP_TAGS.has(c.tagName)) continue;
+    for (let c = root.firstElementChild; c && i < 30; c = c.nextElementSibling, i++) {
+      if (HARD_SKIP_TAGS.has(tagOf(c))) continue;
       let cs = null;
       try { cs = getComputedStyle(c); } catch (e) { continue; }
-      if (isBlockish(c, cs)) return true;
+      if (cs.display === 'contents') {
+        if (treeHasBlocks(c, depth + 1)) return true;
+        continue;
+      }
+      if (isBlockish(c, cs) || hostOfBlocks(c, depth)) return true;
     }
     return false;
   }
 
-  /* 影子根本身不是元素（没有样式、不能作为插入锚点），逐个子元素当作独立块遍历；直接挂在根下的裸文本极少，忽略 */
+  function noteHidden(ctx, el) {
+    if (ctx.hiddenEls && ctx.hiddenEls.length < MAX_HIDDEN_TRACK) ctx.hiddenEls.push(el);
+  }
+
+  /* 影子根本身不是元素（没有样式、不能作为插入锚点），逐个子元素当作独立块遍历 */
   function walkShadow(root, ctx, depth) {
     ctx.shadowRoots.push(root);
     for (let n = root.firstElementChild; n; n = n.nextElementSibling) {
-      if (isHardSkip(n) || !isVisible(n)) continue;
+      if (isHardSkip(n)) continue;
+      if (!isVisible(n)) { noteHidden(ctx, n); continue; }
       walk(n, ctx, depth + 1, getComputedStyle(n));
     }
   }
@@ -382,9 +454,12 @@
   function walk(el, ctx, depth, selfStyle) {
     if (depth > MAX_DEPTH || ctx.units.length >= MAX_UNITS) return;
     if (isHardSkip(el)) return;
+    const tag = tagOf(el);
     // 行内代码用元素一旦被 CSS 变成块级容器（例如 div > code{display:block}），
     // 整块都是代码，必须跳过；而行内的 <code> 仍会作为句子的一部分参与翻译。
-    if (INLINE_SOFT_SKIP.has(el.tagName)) return;
+    if (INLINE_SOFT_SKIP.has(tag)) return;
+    // 已有投影节点的 <slot>：其内部 fallback 子元素不显示，投影内容已随宿主的普通子节点抽取
+    if (tag === 'SLOT' && el.assignedNodes && el.assignedNodes({ flatten: true }).length) return;
     const sr = shadowOf(el);
     if (sr) walkShadow(sr, ctx, depth);      // 宿主的普通子节点（经 slot 投影显示）照常在下面处理
 
@@ -395,16 +470,16 @@
       if (n.nodeType === 3) { if (n.nodeValue && n.nodeValue.trim()) inlineNodes.push(n); continue; }
       if (n.nodeType !== 1) continue;
       if (isHardSkip(n)) continue;
-      if (!isVisible(n)) continue;
+      if (!isVisible(n)) { noteHidden(ctx, n); continue; }
       const cs = getComputedStyle(n);
-      if (isBlockish(n, cs) || hostOfBlocks(n)) { blockKids.push(n); blockStyles.push(cs); }
+      if (isBlockish(n, cs) || hostOfBlocks(n, 0)) { blockKids.push(n); blockStyles.push(cs); }
       else inlineNodes.push(n);
     }
 
     if (!blockKids.length) {
       // 叶子块：整段文本就是一个翻译单元
       const text = inlineTextOf(el);
-      if (isUiStrip(selfStyle, text)) return;
+      if (isUiStrip(el, selfStyle, text)) return;
       const group = controlGroup(el);
       if (group) {
         for (let i = 0; i < group.length; i++) pushUnit(ctx, group[i], inlineTextOf(group[i]), 'full', null);
@@ -421,7 +496,7 @@
       const group = controlGroupOf(inlineNodes, 1);
       if (group) {
         for (let i = 0; i < group.length; i++) pushUnit(ctx, group[i], inlineTextOf(group[i]), 'full', null);
-      } else if (!isUiStrip(selfStyle, text)) {
+      } else if (!isUiStrip(el, selfStyle, text)) {
         pushUnit(ctx, el, text, 'partial', inlineNodes[inlineNodes.length - 1], inlineNodes);
       }
     }
@@ -429,7 +504,7 @@
   }
 
   function collect(root, settings) {
-    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [] };
+    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [], hiddenEls: [] };
     const start = root || document.body;
     if (!start) return [];
     let rootStyle = null;
@@ -437,6 +512,8 @@
     walk(start, ctx, 0, rootStyle);
     // 途经的影子根：MutationObserver 看不到影子树内部的变化，内容脚本需要逐个追加观察
     ctx.units.shadowRoots = ctx.shadowRoots;
+    // 因暂时不可见而跳过的元素：标签页切换 / 折叠展开 / 滚动淡入变为可见时可立即增量翻译
+    ctx.units.hiddenEls = ctx.hiddenEls;
     return ctx.units;
   }
 
@@ -475,7 +552,7 @@
     if (typeof el.checkVisibility === 'function' && getComputedStyle(el).display !== 'contents') {
       try { if (!el.checkVisibility({ visibilityProperty: true })) return false; } catch (e) { /* 忽略 */ }
     }
-    for (let c = el, d = 0; c && c !== document.body && d < 60; c = c.parentElement, d++) {
+    for (let c = el, d = 0; c && c !== document.body && d < 200; c = c.parentElement, d++) {
       if (!isVisible(c)) return false;
     }
     return true;
@@ -487,6 +564,8 @@
     byViewportPriority: byViewportPriority,
     isHardSkip: isHardSkip,
     isVisible: isVisible,
-    isBlockish: isBlockish
+    isBlockish: isBlockish,
+    isAppShell: isAppShell,
+    shadowOf: shadowOf
   };
 })();

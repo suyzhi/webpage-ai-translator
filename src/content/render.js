@@ -16,8 +16,30 @@
   if (NS.Renderer) return;
 
   const TAG = 'wpt-t';
+  const XHTML_NS = 'http://www.w3.org/1999/xhtml';
   const RIGID_PARENT = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP', 'SELECT', 'UL', 'OL', 'DL', 'MENU']);
   const SHORT_TEXT = 28;                     // 视觉长度（CJK 记 2）不超过该值视为短标签
+
+  function tagOf(el) {
+    return el && el.tagName ? el.tagName.toUpperCase() : '';
+  }
+
+  function makeEl(tag) {
+    return typeof document.createElementNS === 'function' ? document.createElementNS(XHTML_NS, tag) : document.createElement(tag);
+  }
+
+  /* 当容器自身 font-size:0（只靠子元素重设字号）时，找第一个有可见字号的子元素作为排版来源 */
+  function nonZeroFontSource(el) {
+    const cs = css(el);
+    if (!cs || parseFloat(cs.fontSize) !== 0 || !el.querySelectorAll) return null;
+    const kids = el.querySelectorAll('*');
+    for (let i = 0; i < kids.length && i < 20; i++) {
+      if (isOurs(kids[i])) continue;
+      const kcs = css(kids[i]);
+      if (kcs && parseFloat(kcs.fontSize) > 0 && (kids[i].textContent || '').trim()) return kids[i];
+    }
+    return null;
+  }
 
   function css(el) {
     try { return getComputedStyle(el); } catch (e) { return null; }
@@ -153,17 +175,17 @@
       if (dcs && /^inline-(block|flex|grid)$/.test(dcs.display)) return { mode: 'inline', target: el, typo: null, only: false };
     }
     const src = typographySource(el);
-    const inner = src !== el ? src : null;
+    const inner = src !== el ? src : nonZeroFontSource(el);
     if (onlyTranslation) return { mode: 'end', target: el, typo: inner, only: true };
 
     if (isRowFlow(cs)) {
       const dom = dominantChild(el, text);
-      if (dom) return { mode: 'end', target: dom, typo: null };
-      if (parent && RIGID_PARENT.has(parent.tagName)) return { mode: 'end', target: el, typo: inner };
-      return { mode: 'sibling', target: el, typo: src };
+      if (dom) return { mode: 'end', target: dom, typo: nonZeroFontSource(dom) };
+      if (parent && RIGID_PARENT.has(tagOf(parent))) return { mode: 'end', target: el, typo: inner };
+      return { mode: 'sibling', target: el, typo: inner || src };
     }
-    if (isClamped(cs) && parent && !RIGID_PARENT.has(parent.tagName)) {
-      return { mode: 'sibling', target: el, typo: src };
+    if (isClamped(cs) && parent && !RIGID_PARENT.has(tagOf(parent))) {
+      return { mode: 'sibling', target: el, typo: inner || src };
     }
     return { mode: 'end', target: el, typo: inner };
   }
@@ -233,7 +255,7 @@
   function create(srcEl, text, settings, p) {
     const pl = p || { mode: 'sibling', target: srcEl, typo: srcEl };
     const inline = pl.mode === 'inline' || !!pl.inline;
-    const node = document.createElement(TAG);
+    const node = makeEl(TAG);
     node.className = 'wpt-translation';
     node.setAttribute('data-wpt', '1');
     node.setAttribute('dir', 'auto');
@@ -299,7 +321,7 @@
       return 'sibling';
     }
     // 追加进影子宿主：宿主的子节点只有分配到 slot 才显示，跟随最后一个子元素进同一个 slot
-    if (target.shadowRoot || (DOM_API && target.tagName.indexOf('-') > 0)) inheritSlot(node, lastLightChild(target));
+    if (target.shadowRoot || (NS.Extractor && NS.Extractor.shadowOf && NS.Extractor.shadowOf(target))) inheritSlot(node, lastLightChild(target));
     target.appendChild(node);
     return pl.mode === 'inline' ? 'inline' : 'end';
   }
@@ -338,6 +360,8 @@
       if (a === document.body || a === document.documentElement) break;
       const cs = css(a);
       if (!cs || cs.display === 'contents' || /^inline/.test(cs.display)) continue;
+      // 内部可滚动容器（如聊天窗口、文档主栏、侧边栏）与 body 一样属于视口滚动区域，滚到下方就能看到，不算被截断
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && a.scrollHeight > a.clientHeight + 2) break;
       // 浮层（绝对 / 固定定位）之外的祖先不随它撑高：只有真正裁切内容的才算
       if (floating && cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
       const ar = a.getBoundingClientRect();
@@ -412,7 +436,7 @@
     if (!parent || parent === document.documentElement || !el || !box.contains(el)) return null;
     // 链接、按钮里的短文案搬到外面就脱离了原来的可点区域，宁可不显示
     if (allowShort && (box.closest(INTERACTIVE_SEL) || el.closest(INTERACTIVE_SEL))) return null;
-    if (RIGID_PARENT.has(parent.tagName) || isRowFlow(css(parent)) || inHorizontalNav(box)) return null;
+    if (RIGID_PARENT.has(tagOf(parent)) || isRowFlow(css(parent)) || inHorizontalNav(box)) return null;
     const bcs = css(box);
     if (bcs && (bcs.position === 'absolute' || bcs.position === 'fixed')) return null;   // 浮在别处的盒子，放其后会落到不相干的位置
     const br = box.getBoundingClientRect();
@@ -478,7 +502,7 @@
 
   /* 加载指示：一个跟随文字颜色的细圈，放在原文末尾，译文到达时原地替换 */
   function createLoader() {
-    const n = document.createElement(TAG);
+    const n = makeEl(TAG);
     n.className = 'wpt-loading';
     n.setAttribute('data-wpt', '1');
     n.setAttribute('aria-hidden', 'true');

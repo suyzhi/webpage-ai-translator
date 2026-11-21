@@ -32,6 +32,16 @@
   let IS_CHILD = false;
   try { IS_CHILD = typeof window !== 'undefined' && window.top !== window; } catch (e) { IS_CHILD = true; }
 
+  const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+  function tagOf(el) { return el && el.tagName ? el.tagName.toUpperCase() : ''; }
+  function mkEl(tag, cls) {
+    const el = typeof document.createElementNS === 'function'
+      ? document.createElementNS(XHTML_NS, tag)
+      : document.createElement(tag);
+    if (cls) el.className = cls;
+    return el;
+  }
+
   const FRAME_BUDGET_MS = 10;
   const SLICE = 40;
 
@@ -62,6 +72,16 @@
     rafId: 0,                   // 待执行渲染的取消函数（nextFrame 返回）
     observer: null,
     shadowRoots: new Set(),     // 抽取时途经的影子根：document 上的观察者看不到其内部变化，需逐个观察
+    hiddenEls: new Set(),       // 抽取时因不可见跳过的元素（标签切换 / 折叠展开 / 滚动淡入变为可见时补翻）
+    revealTimer: 0,
+    scrollTimer: 0,
+    scrollBound: false,
+    frameActive: false,         // 是否有子框架成功启动了翻译（用于 frameset / iframe 为主体的页面）
+    frameTranslated: 0,
+    frameCounts: new Map(),
+    plainWrap: null,            // text/plain 纯文本页面分段落包装容器（还原时摘除）
+    plainPre: null,
+    plainPreDisplay: '',
     clipCheck: [],              // 刚插入的块级译文：下一帧检查是否被容器裁切
     clipTimer: 0,
     io: null,
@@ -130,19 +150,47 @@
     function ensure() {
       clearTimeout(removeTimer);
       if (host && host.isConnected) return;
-      host = document.createElement('wpt-ui');
+      host = mkEl('wpt-ui');
       host.setAttribute('data-wpt', '1');
       host.style.cssText = 'all:initial;position:fixed;z-index:2147483646;right:16px;bottom:16px;pointer-events:none;';
       root = host.attachShadow({ mode: 'open' });
-      root.innerHTML = '<style>' + STYLE + '</style>' +
-        '<div class="box" role="status" aria-live="polite"><div class="main"><span class="ic"></span>' +
-        '<div class="txt"><div class="t"></div><div class="sub"></div></div><div class="acts"></div>' +
-        '<button class="x" title="关闭" aria-label="关闭">✕</button></div><div class="bar"><i></i></div></div>';
-      box = root.querySelector('.box');
-      els = {
-        ic: root.querySelector('.ic'), t: root.querySelector('.t'), sub: root.querySelector('.sub'),
-        acts: root.querySelector('.acts'), bar: root.querySelector('.bar'), x: root.querySelector('.x')
-      };
+      if (typeof root.appendChild === 'function') {
+        // 纯 DOM API 构建：兼容 Trusted Types CSP 与 XHTML 严格 XML 解析，不触碰 innerHTML
+        const st = mkEl('style');
+        st.textContent = STYLE;
+        box = mkEl('div', 'box');
+        box.setAttribute('role', 'status');
+        box.setAttribute('aria-live', 'polite');
+        const main = mkEl('div', 'main');
+        const ic = mkEl('span', 'ic');
+        const txt = mkEl('div', 'txt');
+        const t = mkEl('div', 't');
+        const sub = mkEl('div', 'sub');
+        txt.appendChild(t);
+        txt.appendChild(sub);
+        const acts = mkEl('div', 'acts');
+        const x = mkEl('button', 'x');
+        x.setAttribute('title', '关闭');
+        x.setAttribute('aria-label', '关闭');
+        x.textContent = '✕';
+        main.appendChild(ic);
+        main.appendChild(txt);
+        main.appendChild(acts);
+        main.appendChild(x);
+        const bar = mkEl('div', 'bar');
+        bar.appendChild(mkEl('i'));
+        box.appendChild(main);
+        box.appendChild(bar);
+        root.appendChild(st);
+        root.appendChild(box);
+        els = { ic: ic, t: t, sub: sub, acts: acts, bar: bar, x: x };
+      } else {
+        box = root.querySelector('.box');
+        els = {
+          ic: root.querySelector('.ic'), t: root.querySelector('.t'), sub: root.querySelector('.sub'),
+          acts: root.querySelector('.acts'), bar: root.querySelector('.bar'), x: root.querySelector('.x')
+        };
+      }
       els.x.addEventListener('click', hide);
       document.documentElement.appendChild(host);
       void box.offsetWidth;   // 保证首次出现也有过渡
@@ -215,6 +263,72 @@
     return !!(state.settings && state.settings.displayMode === 'translation');
   }
 
+  /* 纯文本页面（RFC、.txt 文档、GitHub Raw）：Chrome 用单个 <pre> 包装全文，切分为段落后再走常规按需翻译链路，还原时无损恢复 */
+  function preparePlainText() {
+    if (IS_CHILD || document.contentType !== 'text/plain' || state.plainWrap || !document.body) return;
+    const kids = document.body.children;
+    if (!kids || kids.length !== 1 || tagOf(kids[0]) !== 'PRE') return;
+    const pre = kids[0];
+    const raw = pre.textContent || '';
+    if (!raw.trim()) return;
+    const wrap = mkEl('div', 'wpt-plain-wrap');
+    let cs = null;
+    try { cs = getComputedStyle(pre); } catch (e) {}
+    wrap.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;margin:0;padding:0;' +
+      (cs ? 'font-family:' + cs.fontFamily + ';font-size:' + cs.fontSize + ';line-height:1.65;color:' + cs.color + ';' : 'font-family:monospace;line-height:1.65;');
+    const paras = raw.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n+/);
+    const chunks = [];
+    for (let i = 0; i < paras.length && chunks.length < 4000; i++) {
+      const part = paras[i];
+      if (part.length <= 1200) { chunks.push(part); continue; }
+      const lines = part.split('\n');
+      let cur = '';
+      for (let j = 0; j < lines.length && chunks.length < 4000; j++) {
+        if (cur && cur.length + lines[j].length + 1 > 1000) { chunks.push(cur); cur = lines[j]; }
+        else cur = cur ? cur + '\n' + lines[j] : lines[j];
+      }
+      if (cur) chunks.push(cur);
+    }
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < chunks.length; i++) {
+      const p = mkEl('p');
+      p.style.cssText = 'margin:0 0 1em 0;white-space:pre-wrap;';
+      p.textContent = chunks[i];
+      frag.appendChild(p);
+    }
+    wrap.appendChild(frag);
+    state.plainPre = pre;
+    state.plainPreDisplay = pre.style.display;
+    pre.style.display = 'none';
+    document.body.appendChild(wrap);
+    state.plainWrap = wrap;
+  }
+
+  function teardownPlainText() {
+    const had = !!state.plainWrap;
+    if (state.plainWrap && state.plainWrap.parentNode) state.plainWrap.parentNode.removeChild(state.plainWrap);
+    if (state.plainPre) state.plainPre.style.display = state.plainPreDisplay || '';
+    state.plainWrap = null;
+    state.plainPre = null;
+    state.plainPreDisplay = '';
+    return had;
+  }
+
+  function waitBodyReady() {
+    if (document.body || document.readyState !== 'loading' || typeof document.addEventListener !== 'function') return Promise.resolve();
+    return new Promise(function (resolve) {
+      let done = false;
+      function go() { if (done) return; done = true; clearTimeout(t); document.removeEventListener('DOMContentLoaded', go); resolve(); }
+      const t = setTimeout(go, 3000);
+      document.addEventListener('DOMContentLoaded', go, { once: true });
+    });
+  }
+
+  function trackHidden(list) {
+    if (!list || !list.length) return;
+    for (let i = 0; i < list.length && state.hiddenEls.size < 600; i++) state.hiddenEls.add(list[i]);
+  }
+
   /* ---------------- 启动 / 续翻 ---------------- */
   async function start(overrides, opts) {
     const auto = !!(opts && opts.auto);
@@ -239,10 +353,11 @@
       state.starting = false;
       return fail('扩展上下文已失效，请刷新页面后重试');
     }
+    await waitBodyReady();
     state.starting = false;
     settings = Object.assign({}, settings, state.overrides || {});
     state.settings = settings;
-    notifyFrames('start');
+    const frameTask = notifyFrames('start');
     watchFrames(document);
     if (!state.nodes.size) state.hScroll0 = hasHScroll();
     setStatus(NS.STATUS.SCANNING);
@@ -251,13 +366,16 @@
     // 让提示先绘制出来（拿不到帧时由 nextFrame 的定时器兜底，否则会卡在「分析中」）
     await new Promise(function (r) { nextFrame(r, 0); });
 
+    preparePlainText();
     let units;
     try {
-      units = timed('collectMax', NS.Extractor.collect)(document.body, NS.settings.forContent(settings));
+      units = timed('collectMax', NS.Extractor.collect)(state.plainWrap || document.body, NS.settings.forContent(settings));
     } catch (e) {
+      teardownPlainText();
       return fail('页面解析失败：' + ((e && e.message) || e));
     }
     observeShadows(units.shadowRoots);
+    trackHidden(units.hiddenEls);
     // 续翻（停止后再次开始 / 重试失败段落）：已登记的元素不重复翻译
     units = units.filter(function (u) { return !(u.el && state.knownEls.has(u.el)); });
     units = await filterLanguage(units, settings);
@@ -278,6 +396,18 @@
     state.failedIds.clear();
 
     if (!units.length && !state.pending.size && !state.lazy.size) {
+      teardownPlainText();
+      // 主文档无正文但存在子框架（<frameset> / 嵌入文档 / 邮件正文 iframe）：等子框架上报后再决定状态，不误报「未找到可翻译的内容」
+      if (!IS_CHILD && hasCandidateFrames()) {
+        await waitForChildFrames(frameTask);
+        if (state.status !== NS.STATUS.SCANNING) return;
+        if (state.frameActive) {
+          setStatus(NS.STATUS.DONE);
+          startObserving();
+          if (!state.autoRun) ui.show('翻译完成', { kind: 'ok', sub: '已翻译嵌入框架中的内容', actions: [{ label: '还原', run: restore }] });
+          return;
+        }
+      }
       setStatus(state.nodes.size ? NS.STATUS.DONE : NS.STATUS.IDLE);
       if (state.nodes.size) {
         if (!state.autoRun) ui.show('译文已是最新', { kind: 'ok' });
@@ -299,6 +429,7 @@
     observeLazy();
     state.announce = true;
     setStatus(NS.STATUS.TRANSLATING);
+    reportFrameStatus(true);
     armNear();
     updateProgress(true);
     connectAndSend();
@@ -310,8 +441,9 @@
   function explicitLang(el) {
     if (!el || !el.closest) return null;
     const host = el.closest('[lang]');
-    // <html>/<body> 上的 lang 常常是站点模板默认值，不可信；只采信具体元素上的标注（如推文正文）
+    // <html>/<body> 以及应用外壳上的 lang 往往反映界面语言而非正文语言，不可信；只采信具体内容块上的标注（如推文正文）
     if (!host || host === document.documentElement || host === document.body) return null;
+    if (NS.Extractor && NS.Extractor.isAppShell && NS.Extractor.isAppShell(host)) return null;
     return host.getAttribute('lang') || null;
   }
 
@@ -336,7 +468,11 @@
     units.forEach(function (u, i) {
       if (u.isTitle || !u.el) return;
       const lang = explicitLang(u.el);
-      if (lang) { if (U.baseLang(lang) === target) keep[i] = false; return; }
+      if (lang) {
+        // 仅当文本书写系统与目标语言不矛盾时才采信 lang，防止 <div lang="zh-CN"> 误杀整页英文
+        if (U.baseLang(lang) === target && (!U.hasTargetScript || U.hasTargetScript(u.text, settings.targetLang))) keep[i] = false;
+        return;
+      }
       // 太短的文本识别不可靠（人名、按钮），交给「原样返回不显示」兜底
       if (!canDetect || (u.text.match(/\p{L}/gu) || []).length < 16) return;
       jobs.push(detectIsTarget(u.text, target).then(function (hit) { if (hit) keep[i] = false; }));
@@ -647,6 +783,7 @@
       return updateProgress(true);
     }
     setStatus(NS.STATUS.DONE);
+    reportFrameStatus(true);
     stopHeartbeat();
     scheduleRelayout();
     // 增量翻译（滚动加载、实时更新）静默完成，只有用户发起的翻译才提示
@@ -781,6 +918,7 @@
       }
     }
     discardOwnMutations();
+    if (IS_CHILD && state.nodes.size) reportFrameStatus(true);
     scheduleClipCheck();
     scheduleRender();
     updateProgress();
@@ -971,6 +1109,11 @@
     stopObserving();
     disconnectPort();
     let removed = 0;
+    const hadFrames = state.frameActive || state.frameTranslated > 0;
+    state.frameActive = false;
+    state.frameTranslated = 0;
+    state.frameCounts.clear();
+    const hadPlain = teardownPlainText();
     state.nodes.forEach(function (node) {
       if (node && node.parentNode) { node.parentNode.removeChild(node); removed++; }
     });
@@ -997,13 +1140,14 @@
     state.failedIds.clear();
     state.knownEls = new WeakSet();
     state.churn = new WeakMap();
+    state.hiddenEls.clear();
     state.total = 0; state.cached = 0; state.dropped = 0; state.dropLog = []; state.lastStats = null;
     state.error = null;
     state.reconnectTries = 0;
     state.overrides = null;
     state.announce = false;             // 备忘保留：还原后再次翻译可瞬间完成
     setStatus(NS.STATUS.IDLE);
-    if (removed) ui.show('已还原原文', { kind: 'ok', duration: 1800 });
+    if (removed || hadPlain || hadFrames) ui.show('已还原原文', { kind: 'ok', duration: 1800 });
     else ui.hide();
   }
 
@@ -1022,14 +1166,53 @@
   /* 快捷键 / 右键菜单：开 <-> 关。翻译进行中也直接还原（restore 会断开端口，后台随即中止在途请求） */
   function toggle() {
     if (state.status === NS.STATUS.TRANSLATING || state.status === NS.STATUS.SCANNING ||
-        state.nodes.size || state.status === NS.STATUS.DONE) return restore();
+        state.nodes.size || state.frameActive || state.frameTranslated || state.status === NS.STATUS.DONE) return restore();
     return start(null);
   }
 
-  /* ---------------- 动态内容（SPA / 滚动加载 / 原文改写） ---------------- */
-  const OBSERVE_OPTS = { childList: true, subtree: true, characterData: true };
+  /* ---------------- 动态内容（SPA / 滚动加载 / 原文改写 / 隐藏块显现） ---------------- */
+  const OBSERVE_OPTS = {
+    childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open', 'aria-hidden', 'data-state']
+  };
+
+  function onScroll() {
+    if (state.scrollTimer) return;
+    state.scrollTimer = setTimeout(function () {
+      state.scrollTimer = 0;
+      if (state.status !== NS.STATUS.TRANSLATING && state.status !== NS.STATUS.DONE) return;
+      if (state.lazy.size) dispatchNear();
+      if (state.hiddenEls.size) scheduleRevealCheck();
+    }, 180);
+  }
+
+  function scheduleRevealCheck() {
+    if (state.revealTimer || !state.hiddenEls.size) return;
+    state.revealTimer = setTimeout(checkRevealed, 250);
+  }
+
+  /* 检查此前因不可见跳过的元素（标签页切换 / 折叠面板 / 滚动淡入）：一旦变为可见立即补翻 */
+  function checkRevealed() {
+    state.revealTimer = 0;
+    if (state.status !== NS.STATUS.TRANSLATING && state.status !== NS.STATUS.DONE) return;
+    if (!state.hiddenEls.size) return;
+    let found = false;
+    state.hiddenEls.forEach(function (el) {
+      if (!el || !el.isConnected) { state.hiddenEls.delete(el); return; }
+      if (NS.Extractor.isVisible(el)) {
+        state.hiddenEls.delete(el);
+        state.dirtyRoots.push(el);
+        found = true;
+      }
+    });
+    if (found) scheduleDelta();
+  }
 
   function startObserving() {
+    if (!state.scrollBound && typeof document.addEventListener === 'function') {
+      document.addEventListener('scroll', onScroll, { passive: true, capture: true });
+      state.scrollBound = true;
+    }
     if (state.observer || !document.documentElement) return;
     state.observer = new MutationObserver(onMutations);
     try {
@@ -1047,6 +1230,7 @@
       const r = roots[i];
       if (state.shadowRoots.has(r)) continue;
       state.shadowRoots.add(r);
+      watchFrames(r);
       if (state.observer) { try { state.observer.observe(r, OBSERVE_OPTS); } catch (e) {} }
     }
   }
@@ -1056,6 +1240,12 @@
     if (state.io) { try { state.io.disconnect(); } catch (e) {} state.io = null; }
     if (state.nearIO) { try { state.nearIO.disconnect(); } catch (e) {} state.nearIO = null; }
     if (state.armTimer) { clearTimeout(state.armTimer); state.armTimer = 0; }
+    if (state.revealTimer) { clearTimeout(state.revealTimer); state.revealTimer = 0; }
+    if (state.scrollTimer) { clearTimeout(state.scrollTimer); state.scrollTimer = 0; }
+    if (state.scrollBound && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('scroll', onScroll, { capture: true });
+      state.scrollBound = false;
+    }
     if (state.dirtyTimer) { clearTimeout(state.dirtyTimer); state.dirtyTimer = null; }
     state.dirtyRoots = [];
   }
@@ -1076,6 +1266,7 @@
 
   function onMutations(mutations) {
     let relevant = false;
+    let checkReveal = false;
     for (let i = 0; i < mutations.length; i++) {
       const m = mutations[i];
       if (m.type === 'characterData') {
@@ -1083,6 +1274,15 @@
         continue;
       }
       if (insideOurs(m.target)) continue;
+      if (m.type === 'attributes') {
+        if (m.attributeName === 'open' && m.target && m.target.hasAttribute && m.target.hasAttribute('open')) {
+          state.dirtyRoots.push(m.target);
+          relevant = true;
+        } else if (state.hiddenEls.size) {
+          checkReveal = true;
+        }
+        continue;
+      }
       // 译文被页面框架的重渲染抹掉：原样补回（每个单元最多 3 次，防止与框架拉锯）
       const removed = m.removedNodes;
       for (let j = 0; j < removed.length; j++) {
@@ -1110,6 +1310,7 @@
         }
       }
     }
+    if (checkReveal) scheduleRevealCheck();
     if (!relevant) return;
     scheduleDelta();
   }
@@ -1190,6 +1391,7 @@
       let units;
       try { units = timed('collectMax', NS.Extractor.collect)(node, cfg); } catch (e) { continue; }
       observeShadows(units.shadowRoots);
+      trackHidden(units.hiddenEls);
       let invalidated = false;
       const mark = found.length;
       for (let j = 0; j < units.length; j++) {
@@ -1239,7 +1441,7 @@
       failed: state.failedIds.size,
       cached: state.cached,
       dropped: state.dropped,
-      translated: state.nodes.size,
+      translated: state.nodes.size + state.frameTranslated,
       targetLang: state.settings ? state.settings.targetLang : null,
       displayMode: state.settings ? state.settings.displayMode : null,
       error: state.error,
@@ -1250,6 +1452,16 @@
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg || !msg.type) return false;
     if (msg.type === 'wpt:frame-cmd') { if (IS_CHILD) onFrameCmd(msg); return false; }
+    if (msg.type === 'wpt:frame-status') {
+      if (!IS_CHILD && msg.frameId != null) {
+        if (msg.active) state.frameActive = true;
+        state.frameCounts.set(msg.frameId, msg.translated || 0);
+        let sum = 0;
+        state.frameCounts.forEach(function (v) { sum += v; });
+        state.frameTranslated = sum;
+      }
+      return false;
+    }
     if (IS_CHILD && !(msg.type === 'wpt:state' && msg.child)) return false;   // 状态查询、开关等只由顶层页面应答（调试可指定子框架）
     switch (msg.type) {
       case NS.MSG.PING:
@@ -1286,11 +1498,46 @@
 
   /* ---------------- 子框架 ---------------- */
   function notifyFrames(action) {
-    if (IS_CHILD) return;
+    if (IS_CHILD) return Promise.resolve();
     try {
       const p = chrome.runtime.sendMessage({ type: 'wpt:frames', action: action, overrides: state.overrides || null });
+      return p && typeof p.catch === 'function' ? p.catch(function () {}) : Promise.resolve();
+    } catch (e) {
+      return Promise.resolve();
+    }
+  }
+
+  function reportFrameStatus(active) {
+    if (!IS_CHILD) return;
+    try {
+      const p = chrome.runtime.sendMessage({ type: 'wpt:frame-status', active: !!active, translated: state.nodes.size });
       if (p && typeof p.catch === 'function') p.catch(function () {});
     } catch (e) {}
+  }
+
+  function hasCandidateFrames() {
+    if (document.body && tagOf(document.body) === 'FRAMESET') return true;
+    const roots = [document];
+    state.shadowRoots.forEach(function (r) { roots.push(r); });
+    for (let k = 0; k < roots.length; k++) {
+      const list = roots[k].querySelectorAll ? roots[k].querySelectorAll('iframe,frame') : [];
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
+        if (tagOf(f) === 'FRAME') return true;
+        try {
+          const r = f.getBoundingClientRect();
+          if (r.width >= 200 && r.height >= 60) return true;
+        } catch (e) {}
+      }
+    }
+    return false;
+  }
+
+  async function waitForChildFrames(frameTask) {
+    try { await frameTask; } catch (e) {}
+    for (let i = 0; i < 8 && !state.frameActive; i++) {
+      await new Promise(function (r) { setTimeout(r, 80); });
+    }
   }
 
   /*
@@ -1302,7 +1549,8 @@
   let frameTimer = 0;
   function watchFrames(root) {
     if (IS_CHILD || !root) return;
-    const list = root.tagName === 'IFRAME' || root.tagName === 'FRAME' ? [root]
+    const tag = tagOf(root);
+    const list = tag === 'IFRAME' || tag === 'FRAME' ? [root]
       : (root.querySelectorAll ? root.querySelectorAll('iframe,frame') : []);
     for (let i = 0; i < list.length; i++) {
       const f = list[i];
@@ -1318,15 +1566,28 @@
     frameTimer = setTimeout(function () { notifyFrames('start'); }, 400);
   }
 
-  /* 太小（广告位、跟踪像素）或几乎没有文字的框架不值得翻译 */
-  function frameWorthTranslating() {
+  /* 太小（广告位、跟踪像素）或几乎没有文字的框架不值得翻译；兼容影子树内容与仍在加载中的子框架 */
+  async function frameWorthTranslating() {
+    await waitBodyReady();
     if (window.innerWidth < 200 || window.innerHeight < 60 || !document.body) return false;
-    return (document.body.innerText || '').trim().length >= 20;
+    if (tagOf(document.body) === 'FRAMESET') return true;
+    if ((document.body.innerText || '').trim().length >= 20) return true;
+    // 影子树里的内容不会出现在 document.body.innerText 中
+    if (NS.Extractor && NS.Extractor.shadowOf) {
+      if (NS.Extractor.shadowOf(document.body)) return true;
+      const els = document.body.querySelectorAll ? document.body.querySelectorAll('*') : [];
+      for (let i = 0; i < els.length && i < 60; i++) {
+        if (NS.Extractor.shadowOf(els[i])) return true;
+      }
+    }
+    return false;
   }
 
   function onFrameCmd(msg) {
     if (msg.action === 'start') {
-      if (frameWorthTranslating()) start(msg.overrides || null).catch(function () {});
+      frameWorthTranslating().then(function (ok) {
+        if (ok) start(msg.overrides || null).catch(function () {});
+      }).catch(function () {});
     } else if (msg.action === 'restore') {
       if (state.nodes.size || state.status !== NS.STATUS.IDLE) restore();
     } else if (msg.action === 'stop') {
@@ -1356,7 +1617,14 @@
   }).catch(function () {});
 
   async function pageIsTarget(targetLang) {
-    const sample = U.normalizeText((document.body && document.body.innerText || '').slice(0, 3000));
+    // 优先取主内容区（避免中文化导航栏 / 侧边栏误判英文正文页）；超长页首中尾均衡采样
+    const main = document.querySelector && document.querySelector('main, article, [role="main"]');
+    let raw = main && (main.innerText || '').trim().length >= 200 ? main.innerText : (document.body && document.body.innerText || '');
+    if (raw.length > 3600) {
+      const mid = Math.floor(raw.length / 2);
+      raw = raw.slice(0, 1200) + '\n' + raw.slice(mid, mid + 1200) + '\n' + raw.slice(-1200);
+    }
+    const sample = U.normalizeText(raw.slice(0, 3600));
     if (sample.length < 40) return false;
     if (chrome.i18n && typeof chrome.i18n.detectLanguage === 'function') return detectIsTarget(sample, U.baseLang(targetLang));
     return U.isProbablyTargetLang(sample, targetLang);
