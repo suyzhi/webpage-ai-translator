@@ -19,9 +19,11 @@ const unref = (fn) => (...args) => { const t = fn(...args); if (t && t.unref) t.
 
 function fakeNode() {
   return {
-    style: {}, dataset: {}, textContent: '', className: '', isConnected: true,
+    style: {}, dataset: {}, textContent: '', innerText: '', className: '', isConnected: true, scrollWidth: 0,
     classList: { add() {}, remove() {}, contains() { return false; } },
-    setAttribute() {}, appendChild(c) { return c; }
+    setAttribute() {}, getAttribute() { return null; }, addEventListener() {},
+    appendChild(c) { return c; },
+    getBoundingClientRect() { return { top: 0, bottom: 20, width: 100, height: 20 }; }
   };
 }
 
@@ -71,8 +73,10 @@ function loadPage({ host, settings, units }) {
     }
   };
 
+  const win = { innerWidth: 1280, innerHeight: 800, dispatchEvent() {} };
+  win.top = win;
   const ctx = vm.createContext({
-    chrome, document, console, URL,
+    window: win, chrome, document, console, URL, performance,
     location: { hostname: host },
     setTimeout: unref(setTimeout), clearTimeout,
     setInterval: unref(setInterval), clearInterval,

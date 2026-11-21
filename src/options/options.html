@@ -7,21 +7,40 @@
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
-  <div class="wrap">
-    <header class="page-head">
-      <img src="../../icons/icon48.png" alt="" width="34" height="34">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
+    <symbol id="i-lang" viewBox="0 0 24 24"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+  </svg>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="logo"><img src="../../icons/icon48.png" alt="" width="30" height="30"></div>
       <div class="grow">
         <h1>AI 网页翻译</h1>
-        <p class="muted">译文显示在原文段落下方，字体字号与原文一致 · 用自己的 API 密钥</p>
+        <p>译文融入网页原有排版 · 使用你自己的 API 密钥 · 设置自动保存</p>
       </div>
-      <span class="save-state" id="saveState">已保存</span>
-    </header>
+      <span class="save-state" id="saveState"><svg class="i"><use href="#i-check"/></svg>已保存</span>
+    </div>
+  </header>
 
+  <div class="layout">
+    <nav class="tabs" id="tabs" aria-label="设置分区">
+      <a href="#svc" class="active"><svg class="i"><use href="#i-cpu"/></svg>AI 服务</a>
+      <a href="#translate"><svg class="i"><use href="#i-lang"/></svg>翻译设置</a>
+      <a href="#perf"><svg class="i"><use href="#i-gauge"/></svg>性能与可靠性</a>
+    </nav>
+
+  <div class="wrap">
     <!-- AI 服务 -->
-    <section class="card">
+    <section class="card" id="svc">
       <div class="card-head">
-        <h2>AI 服务</h2>
-        <p class="muted">密钥仅保存在本机浏览器存储中，不会上传到任何第三方服务器。</p>
+        <span class="badge"><svg class="i"><use href="#i-cpu"/></svg></span>
+        <div><h2>AI 服务</h2>
+        <p class="muted"><svg class="i inline"><use href="#i-lock"/></svg>密钥仅保存在本机浏览器存储中，不会上传到任何第三方服务器。</p></div>
       </div>
 
       <div class="field">
@@ -29,30 +48,9 @@
         <div class="chips" id="presets"></div>
       </div>
 
-      <div class="grid2">
-        <div class="field">
-          <div class="label"><span>接口协议</span></div>
-          <select id="provider">
-            <option value="openai">OpenAI 兼容 (/chat/completions)</option>
-            <option value="anthropic">Anthropic (/messages)</option>
-          </select>
-        </div>
-        <div class="field">
-          <div class="label"><span>模型</span></div>
-          <input type="text" id="model" list="modelList" placeholder="gpt-4o-mini" spellcheck="false">
-          <datalist id="modelList"></datalist>
-        </div>
-      </div>
-
-      <div class="field">
-        <div class="label"><span>接口地址 Base URL</span></div>
-        <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false">
-        <div class="hint">填到 <code>/v1</code> 即可，程序会自动补 <code>/chat/completions</code>；也可直接填写完整地址。</div>
-      </div>
-
       <div class="field">
         <div class="label">
-          <span>API 密钥</span>
+          <label for="apiKey">API 密钥</label>
           <a href="#" id="keyLink" class="muted" target="_blank" rel="noopener"></a>
         </div>
         <div class="row">
@@ -61,48 +59,104 @@
         </div>
       </div>
 
+      <div class="field">
+        <label class="label" for="model"><span>模型</span></label>
+        <input type="text" id="model" list="modelList" placeholder="deepseek-flash" spellcheck="false">
+        <datalist id="modelList"></datalist>
+        <div class="hint warn-text hidden" id="modelWarn">这看起来是推理（思考）模型：翻译用不上推理，思考消耗的 token 常是译文的数倍。建议改用非推理模型，如 <code>deepseek-flash</code>。</div>
+      </div>
+
       <div class="row test-row">
         <button class="btn" id="testBtn" type="button">测试连接</button>
         <div class="grow test-result" id="testResult"></div>
       </div>
+
+      <details class="more" id="svcMore">
+        <summary>自定义接口<small>使用上方服务商时无需修改</small></summary>
+        <div class="more-body">
+          <div class="field">
+            <label class="label" for="provider"><span>接口协议</span></label>
+            <select id="provider">
+              <option value="openai">OpenAI 兼容 (/chat/completions)</option>
+              <option value="anthropic">Anthropic (/messages)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="baseUrl"><span>接口地址 Base URL</span></label>
+            <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false">
+            <div class="hint">填到 <code>/v1</code> 即可，程序会自动补 <code>/chat/completions</code>；也可直接填写完整地址。</div>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- 翻译设置 -->
-    <section class="card">
-      <div class="card-head"><h2>翻译设置</h2></div>
-
-      <div class="grid2">
-        <div class="field">
-          <div class="label"><span>目标语言</span></div>
-          <select id="targetLang"></select>
-        </div>
-        <div class="field">
-          <div class="label"><span>原文语言</span></div>
-          <select id="sourceLang">
-            <option value="auto">自动识别</option>
-          </select>
-        </div>
+    <section class="card" id="translate">
+      <div class="card-head">
+        <span class="badge"><svg class="i"><use href="#i-lang"/></svg></span>
+        <div><h2>翻译设置</h2><p class="muted">目标语言、显示方式与译文样式。</p></div>
       </div>
 
       <div class="field">
-        <div class="label"><span>显示方式</span></div>
-        <div class="seg" id="displaySeg">
+        <label class="label" for="targetLang"><span>目标语言</span></label>
+        <select id="targetLang"></select>
+      </div>
+
+      <div class="field">
+        <div class="label"><span id="displayLabel">显示方式</span></div>
+        <div class="seg" id="displaySeg" role="group" aria-labelledby="displayLabel">
           <button type="button" data-value="bilingual" aria-pressed="true">双语对照（原文 + 译文）</button>
           <button type="button" data-value="translation" aria-pressed="false">仅显示译文</button>
         </div>
       </div>
 
       <div class="field">
-        <div class="label"><span>译文标记样式</span></div>
-        <div class="seg" id="markSeg">
+        <div class="label"><span id="markLabel">译文标记样式</span></div>
+        <div class="seg" id="markSeg" role="group" aria-labelledby="markLabel">
           <button type="button" data-value="none" aria-pressed="true">无</button>
           <button type="button" data-value="underline" aria-pressed="false">下划线</button>
           <button type="button" data-value="border" aria-pressed="false">左侧竖线</button>
           <button type="button" data-value="background" aria-pressed="false">浅色底纹</button>
+          <button type="button" data-value="dim" aria-pressed="false">弱化</button>
         </div>
-        <div class="hint">字体、字号、行高、颜色始终从原文复制，与标记样式无关。</div>
+        <div class="hint">译文放在原文所在的元素内部，自动沿用网页自己的字体、颜色与间距；标记颜色取自文字颜色，深色网站同样协调。</div>
       </div>
 
+      <div class="preview" aria-label="效果预览">
+        <div class="preview-head"><span>效果预览</span><div class="preview-theme" id="previewTheme" role="group" aria-label="预览背景">
+          <button type="button" data-theme="light" aria-pressed="true" title="浅色网页"></button>
+          <button type="button" data-theme="dark" aria-pressed="false" title="深色网页"></button>
+          <button type="button" data-theme="sepia" aria-pressed="false" title="阅读模式"></button>
+        </div></div>
+        <div class="preview-page" id="previewPage" data-theme="light">
+          <h3 class="pv-title"><span class="pv-src">Why translate in context?</span><span class="pv-tr" id="pvT1">为什么要整段翻译？</span></h3>
+          <p class="pv-body"><span class="pv-src">Sentence-by-sentence translation loses context. When a whole paragraph is sent at once, the model can keep terminology consistent.</span><span class="pv-tr" id="pvT2">逐句翻译会丢失上下文。整段交给模型时，它能保持术语一致。</span></p>
+          <p class="pv-meta"><b>Ea Nasir</b> <span>@ea_nasir · 3h</span> <em>人名、用户名与时间不会被翻译</em></p>
+        </div>
+      </div>
+
+      <div class="switch">
+        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭），可在下方「网站规则」中按网站例外</small></div>
+        <label class="toggle"><input type="checkbox" id="autoTranslate"><span class="track"></span></label>
+      </div>
+
+      <details class="more" id="translateMore">
+        <summary>更多选项<small>原文语言、按需翻译、动画、提示词等</small></summary>
+        <div class="more-body">
+      <div class="field">
+        <label class="label" for="sourceLang"><span>原文语言</span></label>
+        <select id="sourceLang">
+          <option value="auto">自动识别</option>
+        </select>
+      </div>
+      <div class="switch">
+        <div class="text">按需翻译<small>只翻译当前屏幕附近的内容，滚动到哪翻到哪；长页面可省下大部分 token</small></div>
+        <label class="toggle"><input type="checkbox" id="lazyTranslate"><span class="track"></span></label>
+      </div>
+      <div class="switch">
+        <div class="text">统一本页术语<small>长页面先定下反复出现的术语怎么译，前后不再一会儿译、一会儿保留英文；多一次小请求，首屏之后的内容约晚 2 秒出来</small></div>
+        <label class="toggle"><input type="checkbox" id="pageGlossary"><span class="track"></span></label>
+      </div>
       <div class="switch">
         <div class="text">跳过已经是目标语言的文本<small>减少无效请求，节省 token</small></div>
         <label class="toggle"><input type="checkbox" id="skipTargetLang"><span class="track"></span></label>
@@ -112,43 +166,42 @@
         <label class="toggle"><input type="checkbox" id="translateTitle"><span class="track"></span></label>
       </div>
       <div class="switch">
-        <div class="text">自动翻译<small>打开网页后自动翻译（默认关闭），可在下方「网站规则」中按网站例外</small></div>
-        <label class="toggle"><input type="checkbox" id="autoTranslate"><span class="track"></span></label>
-      </div>
-      <div class="switch">
-        <div class="text">插入动画<small>译文淡入效果</small></div>
+        <div class="text">插入动画<small>译文按阅读顺序依次浮现，待翻译段落显示加载指示（跟随系统「减少动态效果」）</small></div>
         <label class="toggle"><input type="checkbox" id="animations"><span class="track"></span></label>
       </div>
 
       <div class="grid2 top-gap">
         <div class="field">
-          <div class="label"><span>最短翻译长度</span></div>
+          <label class="label" for="minTextLength"><span>最短翻译长度</span></label>
           <input type="number" id="minTextLength" min="0" max="40" step="1">
           <div class="hint">低于该长度的文本片段不翻译，避免噪音。</div>
         </div>
         <div class="field">
-          <div class="label"><span>温度 temperature</span></div>
+          <label class="label" for="temperature"><span>温度 temperature</span></label>
           <input type="number" id="temperature" min="0" max="1.5" step="0.1">
           <div class="hint">翻译建议 0 – 0.3，越低越稳定。</div>
         </div>
       </div>
 
       <div class="field">
-        <div class="label"><span>自定义提示词（可选）</span></div>
+        <label class="label" for="customPrompt"><span>自定义提示词（可选）</span></label>
         <textarea id="customPrompt" placeholder="例如：专业术语保留英文原文；语气保持口语化。"></textarea>
       </div>
+        </div>
+      </details>
     </section>
 
     <!-- 网站规则 -->
     <section class="card">
       <div class="card-head">
-        <h2>网站规则</h2>
-        <p class="muted">按网站覆盖「自动翻译」开关：子域名沿用父域名的规则，更具体的域名优先；手动翻译不受影响。也可在弹出面板中为当前网站设置。</p>
+        <span class="badge"><svg class="i"><use href="#i-globe"/></svg></span>
+        <div><h2>网站规则</h2>
+        <p class="muted">按网站覆盖「自动翻译」开关：子域名沿用父域名的规则，更具体的域名优先；手动翻译不受影响。也可在弹出面板中为当前网站设置。</p></div>
       </div>
 
       <div class="grid2">
         <div class="field">
-          <div class="label"><span>总是翻译</span><span class="muted" id="alwaysCount"></span></div>
+          <label class="label" for="alwaysInput"><span>总是翻译</span><span class="muted" id="alwaysCount"></span></label>
           <div class="row">
             <input type="text" id="alwaysInput" class="grow" placeholder="example.com" spellcheck="false">
             <button class="btn" id="alwaysAdd" type="button">添加</button>
@@ -156,7 +209,7 @@
           <ul class="site-list" id="alwaysList"></ul>
         </div>
         <div class="field">
-          <div class="label"><span>从不翻译</span><span class="muted" id="neverCount"></span></div>
+          <label class="label" for="neverInput"><span>从不翻译</span><span class="muted" id="neverCount"></span></label>
           <div class="row">
             <input type="text" id="neverInput" class="grow" placeholder="example.cn" spellcheck="false">
             <button class="btn" id="neverAdd" type="button">添加</button>
@@ -168,29 +221,51 @@
     </section>
 
     <!-- 性能 -->
-    <section class="card">
+    <section class="card" id="perf">
       <div class="card-head">
-        <h2>性能与可靠性</h2>
-        <p class="muted">译文按段落打包批量请求，相同文本自动去重并命中缓存。</p>
+        <span class="badge"><svg class="i"><use href="#i-gauge"/></svg></span>
+        <div><h2>性能与可靠性</h2>
+        <p class="muted">译文按段落打包批量请求，相同文本自动去重并命中缓存。默认参数已按实测调好，一般无需修改。</p></div>
       </div>
 
+      <div class="row cache-row">
+        <button class="btn" id="refreshStats" type="button">刷新统计</button>
+        <button class="btn btn-danger" id="clearCache" type="button">清空缓存</button>
+        <div class="grow muted" id="cacheStats">—</div>
+      </div>
+
+      <div class="row cache-row">
+        <button class="btn" id="resetUsage" type="button">用量清零</button>
+        <div class="grow muted" id="usageStats">—</div>
+      </div>
+
+      <details class="more" id="perfMore">
+        <summary>高级参数<small>并发、批次、重试、超时与缓存</small></summary>
+        <div class="more-body">
       <div class="field">
-        <div class="label"><span>并发数量</span><span class="mono value" id="concurrencyVal">4</span></div>
-        <input type="range" id="concurrency" min="1" max="16" step="1">
-        <div class="hint">同时进行的 API 请求数。过低会慢，过高容易触发 429 速率限制。推荐 3–6。</div>
+        <div class="label"><label for="concurrency">并发数量</label><span class="mono value" id="concurrencyVal">4</span></div>
+        <input type="range" id="concurrency" min="1" max="32" step="1">
+        <div class="chips sm" id="concPresets" role="group" aria-label="并发快捷选择">
+          <button type="button" class="chip" data-value="2">2</button>
+          <button type="button" class="chip" data-value="4">4</button>
+          <button type="button" class="chip" data-value="8">8</button>
+          <button type="button" class="chip" data-value="16">16</button>
+          <button type="button" class="chip" data-value="32">32</button>
+        </div>
+        <div class="hint">同一密钥下所有标签页合计的并发上限；触发 429 时自动减半并冷却，再逐步恢复。推荐 3–8；付费高配额可试 16–32。</div>
       </div>
 
       <div class="grid3">
         <div class="field">
-          <div class="label"><span>每批字符数</span></div>
+          <label class="label" for="batchChars"><span>每批字符数</span></label>
           <input type="number" id="batchChars" min="200" max="8000" step="100">
         </div>
         <div class="field">
-          <div class="label"><span>每批段数</span></div>
-          <input type="number" id="batchItems" min="1" max="60" step="1">
+          <label class="label" for="batchItems"><span>每批段数</span></label>
+          <input type="number" id="batchItems" min="1" max="120" step="1">
         </div>
         <div class="field">
-          <div class="label"><span>首批字符数</span></div>
+          <label class="label" for="firstBatchChars"><span>首批字符数</span></label>
           <input type="number" id="firstBatchChars" min="100" max="4000" step="50">
           <div class="hint">更小的首批让首屏译文更快出现。</div>
         </div>
@@ -198,15 +273,15 @@
 
       <div class="grid3">
         <div class="field">
-          <div class="label"><span>失败重试次数</span></div>
+          <label class="label" for="maxRetries"><span>失败重试次数</span></label>
           <input type="number" id="maxRetries" min="0" max="5" step="1">
         </div>
         <div class="field">
-          <div class="label"><span>单次超时（毫秒）</span></div>
+          <label class="label" for="timeoutMs"><span>单次超时（毫秒）</span></label>
           <input type="number" id="timeoutMs" min="5000" max="300000" step="1000">
         </div>
         <div class="field">
-          <div class="label"><span>缓存上限（条）</span></div>
+          <label class="label" for="cacheMaxEntries"><span>缓存上限（条）</span></label>
           <input type="number" id="cacheMaxEntries" min="100" max="20000" step="100">
         </div>
       </div>
@@ -215,12 +290,8 @@
         <div class="text">启用翻译缓存<small>重复内容直接复用，跨标签页共享</small></div>
         <label class="toggle"><input type="checkbox" id="useCache"><span class="track"></span></label>
       </div>
-
-      <div class="row cache-row">
-        <button class="btn" id="refreshStats" type="button">刷新统计</button>
-        <button class="btn btn-danger" id="clearCache" type="button">清空缓存</button>
-        <div class="grow muted" id="cacheStats">—</div>
-      </div>
+        </div>
+      </details>
     </section>
 
     <footer class="page-foot">
@@ -228,6 +299,7 @@
       <span class="grow"></span>
       <button class="btn btn-ghost" id="resetBtn" type="button">恢复默认设置</button>
     </footer>
+  </div>
   </div>
 
   <div class="toast" id="toast"></div>

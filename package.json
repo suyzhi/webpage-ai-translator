@@ -5,6 +5,19 @@
   "description": "Edge/Chrome 扩展：用你自己的 AI API 密钥翻译网页，译文显示在原文段落下方",
   "scripts": {
     "test": "node --test tests/wpt.test.mjs tests/engine.test.mjs tests/render.test.mjs tests/content.test.mjs",
+    "test:e2e": "node tools/e2e-headless.mjs",
+    "test:extract": "node tools/e2e-extract.mjs",
+    "test:ui": "node tools/e2e-ui.mjs",
+    "test:dynamic": "node tools/e2e-dynamic.mjs",
+    "test:social": "node tools/e2e-social.mjs",
+    "test:lazy": "node tools/e2e-lazy.mjs",
+    "test:frames": "node tools/e2e-frames.mjs",
+    "bench": "node tools/bench.mjs",
+    "eval:coverage": "node tools/eval-coverage.mjs",
+    "eval:cost": "node tools/eval-cost.mjs",
+    "eval:layout": "node tools/eval-layout.mjs",
+    "eval:quality": "node tools/eval-quality.mjs",
+    "eval:terms": "node tools/eval-terms.mjs",
     "icons": "node tools/make-icons.mjs"
   },
   "license": "MIT"

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Frames demo</title></head>
+<body>
+<h1>Page with embedded frames</h1>
+<p>This paragraph lives in the top-level document and should be translated as usual.</p>
+<iframe id="same" src="frame-content.html?same" style="width:640px;height:220px;border:1px solid #ccc"></iframe>
+<iframe id="cross" style="width:640px;height:220px;border:1px solid #ccc"></iframe>
+<iframe id="tiny" src="frame-content.html?tiny" style="width:60px;height:20px;border:0"></iframe>
+<script>
+  // 跨源框架：同一个 mock 服务换成 localhost 主机名，源不同
+  document.getElementById('cross').src = location.protocol + '//localhost:' + location.port + '/demo/frame-content.html?cross';
+</script>
+</body>
+</html>

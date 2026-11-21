@@ -53,8 +53,10 @@
 
   /* 视觉长度：CJK 记 2，其余记 1（用于批量打包估算 token 量） */
   U.visualLength = function (text) {
+    const s = String(text || '');
+    if (!/[^\x00-\x7f]/.test(s)) return s.length;   // 纯 ASCII 快速路径
     let n = 0;
-    for (const ch of String(text || '')) {
+    for (const ch of s) {
       const c = ch.codePointAt(0);
       n += (c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xac00 && c <= 0xd7af) ? 2 : 1;
     }
@@ -177,6 +179,10 @@
     ['armenian', /[\u0530-\u058f]/g]
   ];
 
+  /* 预编译的非全局正则：统计前先快速排除「完全不含目标脚本」的文本 */
+  const SCRIPT_TEST = Object.create(null);
+  for (const [name, re] of SCRIPT_RANGES) SCRIPT_TEST[name] = new RegExp(re.source);
+
   U.scriptCounts = function (text) {
     const counts = Object.create(null);
     const s = String(text || '');
@@ -197,10 +203,20 @@
     if (!lang) return false;
     const target = lang.script;
     if (!target || target === 'latin') return false;
-    const counts = U.scriptCounts(text);
+    const s = String(text || '');
+    // 快速排除：源语言页面通常完全不含目标脚本，省去 20+ 次全量正则扫描
+    const quick = SCRIPT_TEST[target];
+    if (quick && !quick.test(s)) return false;
+    const counts = U.scriptCounts(s);
     let total = 0;
     for (const k in counts) total += counts[k];
-    if (total < 2) return false;
+    // 中日韩目标：夹在句中的英文按「词」计（一个英文词≈一个汉字词），
+    // 否则「OpenAI 发布 GPT 模型」这类中文句子会因为字母多而被误判成外文
+    if ((target === 'han' || target === 'kana' || target === 'hangul') && counts.latin) {
+      const words = (s.match(/[A-Za-z\u00c0-\u024f\u1e00-\u1eff]+/g) || []).length;
+      total = total - counts.latin + words * 1.5;
+    }
+    if (total < 1) return false;
     const c = counts[target] || 0;
 
     if (target === 'han') {
@@ -220,10 +236,81 @@
   };
 
   const NON_TRANSLATABLE_RE = /^(?:[\d\s\p{P}\p{S}]+|https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.]+)$/u;
+  /* 社交媒体里的标识而非语句：@用户名 / #话题 / $股票代码，可多个并列 */
+  /* 「显示名 @用户名」组合（X / Mastodon / Bluesky 的作者行） */
+  const NAME_HANDLE_RE = /^(?:\S+\s){1,6}@[\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?$/u;
+  const TAG_ONLY_RE = /^(?:[@#\uff03$][\p{L}\p{N}_.]+(?:@[\p{L}\p{N}_.-]+)?(?:[\s\u00b7\u2022,\uff0c\u3001|/]+|$))+$/u;
+
+  /*
+   * 翻了反而添乱的极短标签：日历刻度（Jan / Mon / Oct 18, 2026 / Mon 10:30 AM）与人人认得的界面词（More / Less / Sign in）。
+   * 贡献图、日期列、图例里成排出现，「Jan 1月」「More 较多」只会把版面挤乱、白花 token。整段恰好是这些词才算。
+   */
+  const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  const WEEKDAY = '(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)';
+  const CAL_TOKEN = '(?:' + MONTH + '|' + WEEKDAY + '|\\d{1,4}(?:st|nd|rd|th)?|\\d{1,2}:\\d{2}(?::\\d{2})?|[ap]\\.?m\\.?)\\.?';
+  const CALENDAR_RE = new RegExp('^(?=.*\\b(?:' + MONTH + '|' + WEEKDAY + ')\\b)' + CAL_TOKEN + '(?:[\\s,/\\-\u2013]+' + CAL_TOKEN + ')*$', 'i');
+  const UI_WORD_RE = new RegExp('^(?:more|less|next|prev(?:ious)?|back|home|menu|search|share|reply|edit|delete|save|cancel|ok|yes|no|close|copy|' +
+    'like|follow|log ?in|log ?out|sign ?in|sign ?up|sign ?out|subscribe|top|new|hot|best|all|' +
+    '(?:show|see|read|load|view) (?:more|less|all))[\\s.:\u2026\u203a\u00bb>\u2192\u25be\u25b8]*$', 'i');
+  U.isTrivialLabel = function (s) {
+    return s.length <= 40 && (CALENDAR_RE.test(s) || UI_WORD_RE.test(s));
+  };
+
+  /*
+   * 本页术语候选：在 ≥ minUnits（默认 3）段里出现的 1–3 词短语（去掉首尾停用词、月份星期），按「出现段数 × 词数」排序，
+   * 被已选更长短语包含的、或包含已选短语的去掉。返回 [{ term: 首次出现时的原样大小写, sample: 所在句子片段 }]。
+   * 送给模型先定译法（见 engine 的本页术语表），也供术语一致性评测选题。
+   */
+  const TERM_STOP = new Set(('a an the and or but of to in on at by for with from as is are was were be been being it its this that these those ' +
+    'you your we our they their he she his her i me my not no can will would should could may might must do does did done has have had ' +
+    'if then than so such also more most other some any each all one two use used using how what when where which who why new see ' +
+    'about into over after before between through out up down only just like here there get set make way first last many much very ' +
+    'retrieved archived original').split(' '));
+  U.pickTerms = function (texts, n, minUnits) {
+    const need = minUnits || 3;
+    const seen = new Map();
+    for (let idx = 0; idx < texts.length; idx++) {
+      const t = String(texts[idx] || '');
+      const words = t.match(/[A-Za-z][A-Za-z0-9-]*(?:'[a-z]+)?/g) || [];
+      const lower = words.map((w) => w.toLowerCase());
+      const local = new Set();
+      for (let k = 1; k <= 3; k++) {
+        for (let i = 0; i + k <= words.length; i++) {
+          const g = lower.slice(i, i + k);
+          if (TERM_STOP.has(g[0]) || TERM_STOP.has(g[k - 1])) continue;
+          if (k === 1 && g[0].length < 5) continue;
+          if (g.some((w) => U.isTrivialLabel(w))) continue;
+          const key = g.join(' ');
+          if (local.has(key)) continue;
+          local.add(key);
+          let c = seen.get(key);
+          if (!c) {
+            const orig = words.slice(i, i + k).join(' ');
+            const at = t.indexOf(orig);
+            c = { term: orig, sample: t.slice(Math.max(0, at - 30), at + orig.length + 40).replace(/\s+/g, ' ').trim(), units: 0 };
+            seen.set(key, c);
+          }
+          c.units++;
+        }
+      }
+    }
+    const cands = [];
+    seen.forEach((c, key) => { if (c.units >= need) cands.push({ key: key, c: c, score: c.units * key.split(' ').length }); });
+    cands.sort((a, b) => b.score - a.score);
+    const out = [];
+    for (let i = 0; i < cands.length && out.length < n; i++) {
+      const k = cands[i].key;
+      const sing = k.replace(/s$/, '');
+      if (out.some((o) => (' ' + o.key + ' ').indexOf(' ' + k + ' ') >= 0 || (' ' + k + ' ').indexOf(' ' + o.key + ' ') >= 0 ||
+        o.key.replace(/s$/, '') === sing)) continue;                       // component / components 只留一个
+      out.push(cands[i]);
+    }
+    return out.map((o) => ({ term: o.c.term, sample: o.c.sample, units: o.c.units }));
+  };
 
   /* 该段文本是否值得送去翻译 */
-  U.isTranslatable = function (text, settings) {
-    const s = U.normalizeText(text);
+  U.isTranslatable = function (text, settings, preNormalized) {
+    const s = preNormalized ? String(text == null ? '' : text) : U.normalizeText(text);
     const minLen = settings && settings.minTextLength != null ? settings.minTextLength : 2;
     if (s.length < Math.max(1, minLen)) return false;
     if (!/\p{L}/u.test(s)) return false;
@@ -231,8 +318,26 @@
     // 纯数字/符号占比过高（如 "1,234.56 +12% ——"）直接跳过
     const letters = (s.match(/\p{L}/gu) || []).length;
     if (letters < 2 && s.length > 8) return false;
+    if (TAG_ONLY_RE.test(s) || NAME_HANDLE_RE.test(s)) return false;
+    // 数字 + 极少字母：计数、时间、比分之类（3h / 1.2K / 27万 / v2 / 2-1 W）
+    if (letters <= 2 && /\d/.test(s)) return false;
+    if (U.isTrivialLabel(s)) return false;
     if (settings && settings.skipTargetLang && U.isProbablyTargetLang(s, settings.targetLang)) return false;
     return true;
+  };
+
+  /* 译文与原文实质相同（模型原样返回的人名、品牌、代码等）：忽略大小写、空白与标点比较 */
+  U.sameText = function (a, b) {
+    const key = (x) => String(x == null ? '' : x).toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+    const ka = key(a);
+    return !!ka && ka === key(b);
+  };
+
+  /* 语言代码归一到主语言（兼容 CLD 的旧代码） */
+  const LANG_ALIAS = { iw: 'he', in: 'id', tl: 'fil', nb: 'no', nn: 'no', jw: 'jv' };
+  U.baseLang = function (code) {
+    const c = String(code || '').toLowerCase().split(/[-_]/)[0];
+    return LANG_ALIAS[c] || c;
   };
 
   /* ---------------- 批处理规划 ----------------
@@ -289,6 +394,81 @@
     if (failure) throw failure;
   };
 
+  /* ---------------- 共享限流器 ----------------
+   * 同一 API 端点 + 密钥的所有任务（多个标签页、同页多次增量）共用一个限流器：
+   *   - 并发上限 = 用户设置的并发数，而不是「每个标签页各自一份」；
+   *   - AIMD 自适应：遇到 429 并发减半并进入全局冷却（尊重 Retry-After），
+   *     之后每连续成功 limit 次再 +1，逐步恢复到上限，避免 429 风暴；
+   *   - FIFO 排队，保证先提交（视口优先）的批次先发出。
+   */
+  U.Limiter = class Limiter {
+    constructor(max) {
+      this.max = Math.max(1, Math.round(max) || 1);
+      this.limit = this.max;
+      this.active = 0;
+      this.queue = [];
+      this.cooldownUntil = 0;
+      this.okStreak = 0;
+    }
+    setMax(n) {
+      const m = Math.max(1, Math.round(n) || 1);
+      if (m === this.max) return;
+      // 调低立即生效；调高时若当前处于降速状态则保留降速，由成功次数逐步恢复
+      this.limit = this.limit >= this.max ? m : Math.min(this.limit, m);
+      this.max = m;
+      this._drain();
+    }
+    async acquire(signal) {
+      if (signal && signal.aborted) throw abortError();
+      if (this.active < this.limit && !this.queue.length) this.active++;
+      else {
+        await new Promise((resolve, reject) => {
+          const w = { resolve: resolve, reject: reject, onAbort: null, signal: signal };
+          if (signal) {
+            w.onAbort = () => {
+              const i = this.queue.indexOf(w);
+              if (i >= 0) this.queue.splice(i, 1);
+              reject(abortError());
+            };
+            signal.addEventListener('abort', w.onAbort, { once: true });
+          }
+          this.queue.push(w);
+        });
+      }
+      // 已占到名额；若处于 429 冷却期则持有名额等待，防止冷却结束瞬间的突发
+      const wait = this.cooldownUntil - Date.now();
+      if (wait > 0) {
+        try { await U.sleep(wait, signal); } catch (e) { this.release(); throw e; }
+      }
+    }
+    release() {
+      this.active = Math.max(0, this.active - 1);
+      this._drain();
+    }
+    _drain() {
+      while (this.active < this.limit && this.queue.length) {
+        const w = this.queue.shift();
+        this.active++;
+        if (w.signal && w.onAbort) w.signal.removeEventListener('abort', w.onAbort);
+        w.resolve();
+      }
+    }
+    onSuccess() {
+      if (this.limit >= this.max) { this.okStreak = 0; return; }
+      if (++this.okStreak >= this.limit) {
+        this.limit++;
+        this.okStreak = 0;
+        this._drain();
+      }
+    }
+    onRateLimit(retryAfterMs) {
+      this.limit = Math.max(1, Math.floor(this.limit / 2));
+      this.okStreak = 0;
+      const until = Date.now() + (retryAfterMs != null ? retryAfterMs : 1000);
+      if (until > this.cooldownUntil) this.cooldownUntil = until;
+    }
+  };
+
   /* ---------------- LRU ---------------- */
   U.LRUCache = class LRUCache {
     constructor(max) {
@@ -332,10 +512,18 @@
     if (!err) return '未知错误';
     if (U.isAbort(err)) return '已取消';
     const status = err.status;
-    if (status === 401 || status === 403) return 'API 密钥无效或无权限 (HTTP ' + status + ')';
-    if (status === 404) return '接口地址或模型不存在 (HTTP 404)，请检查 Base URL 与模型名';
-    if (status === 429) return '触发速率限制 (HTTP 429)，请降低并发数或稍后重试';
-    if (status >= 500) return 'AI 服务端错误 (HTTP ' + status + ')';
+    if (status === 401 || status === 403) return 'API 密钥无效或无权限（HTTP ' + status + '）：请在设置页检查密钥是否填对、是否已作废';
+    if (status === 402) return '账户余额不足（HTTP 402）：请到 AI 服务商控制台充值后重试';
+    if (err.badModel) {
+      // DeepSeek 会列出支持的模型名，直接转告
+      const m = /supported (?:api )?model names are ([^.(]+)/i.exec(err.detail || '');
+      return '模型名有误（HTTP ' + status + '）：' + (m ? '可用的模型是 ' + m[1].trim() : '请在设置页检查模型名');
+    }
+    if (status === 404) return '接口地址或模型不存在（HTTP 404）：请检查 Base URL 与模型名';
+    if (status === 422) return '请求参数不被接受（HTTP 422）：' + U.truncate(err.detail || '', 120);
+    if (status === 429) return '触发速率限制（HTTP 429）：请降低并发数或稍后重试';
+    if (status === 503) return 'AI 服务繁忙（HTTP 503）：请稍后重试';
+    if (status >= 500) return 'AI 服务端错误（HTTP ' + status + '）：请稍后重试';
     if (err.name === 'TimeoutError' || /timeout/i.test(err.message || '')) return '请求超时，请检查网络或调大超时时间';
     if (err.name === 'TypeError') return '网络请求失败：无法连接 ' + (err.url || 'API 地址') + '（检查地址/代理/网络）';
     return U.truncate(err.message || String(err), 300);

@@ -39,7 +39,8 @@
   "commands": {
     "toggle-translate": {
       "suggested_key": {
-        "default": "Alt+Shift+T"
+        "default": "Alt+A",
+        "mac": "Alt+A"
       },
       "description": "翻译 / 还原当前页面"
     }

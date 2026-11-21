@@ -13,6 +13,8 @@
   NS.SETTINGS_KEY = 'wpt.settings.v1';
   NS.CACHE_PREFIX = 'wpt.c.';
   NS.CACHE_META_KEY = 'wpt.cache.meta.v1';
+  NS.USAGE_KEY = 'wpt.usage.v1';
+  NS.SETTINGS_REV = 6;         // 设置结构修订号：低于此值的已存设置会做一次性迁移
 
   NS.MSG = {
     PING: 'wpt:ping',
@@ -29,7 +31,9 @@
     TEST_CONNECTION: 'wpt:test-connection',
     INJECT: 'wpt:inject',
     TOGGLE: 'wpt:toggle',
-    NOTIFY: 'wpt:notify'
+    NOTIFY: 'wpt:notify',
+    USAGE: 'wpt:usage',
+    USAGE_RESET: 'wpt:usage-reset'
   };
 
   NS.STATUS = {
@@ -43,23 +47,25 @@
   NS.DEFAULT_SETTINGS = {
     // ---- AI 服务 ----
     provider: 'openai',            // openai | anthropic
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: 'https://api.deepseek.com/v1',   // 新装默认 DeepSeek：填入密钥即可翻译（已保存的设置是完整对象，不受影响）
     apiKey: '',
-    model: 'gpt-4o-mini',
+    model: 'deepseek-flash',
     temperature: 0.2,
     // ---- 翻译 ----
     targetLang: 'zh-CN',
     sourceLang: 'auto',
     displayMode: 'bilingual',      // bilingual | translation
-    markStyle: 'none',             // none | underline | border | background
+    markStyle: 'none',             // none | underline | border | background | dim
     skipTargetLang: true,
     translateTitle: true,
     minTextLength: 2,
     customPrompt: '',
     // ---- 性能 ----
-    concurrency: 4,                // 1 - 16
-    batchChars: 1200,
-    batchItems: 16,
+    lazyTranslate: true,           // 只翻译视口附近的内容，滚动到再翻（省 token）
+    pageGlossary: false,           // 长页面先定下反复出现的术语译法，各批次统一；首屏之后的段落要等它约 2 s（真实测段等待 P50 2.7 → 5.1 s），默认关
+    concurrency: 4,                // 1 - 32
+    batchChars: 5000,              // 批次越大，系统提示词的固定开销摊得越薄（DeepSeek 不缓存这么短的前缀，每次请求都全额计费）
+    batchItems: 64,                // 真实 6 站实测：相对 24 段 / 2000 字，输入 token -22%，输出不变，0 失败
     firstBatchChars: 400,          // 首批更小 => 首屏更快
     maxRetries: 2,
     timeoutMs: 60000,
@@ -74,9 +80,9 @@
   NS.SITE_RULES_MAX = 500;
 
   NS.LIMITS = {
-    concurrency: [1, 16],
+    concurrency: [1, 32],
     batchChars: [200, 8000],
-    batchItems: [1, 60],
+    batchItems: [1, 120],
     firstBatchChars: [100, 4000],
     maxRetries: [0, 5],
     timeoutMs: [5000, 300000],
@@ -88,7 +94,7 @@
   /* 供应商预设：baseUrl 只需写到 /v1，适配器会自动补 /chat/completions */
   NS.PRESETS = [
     { id: 'openai',     label: 'OpenAI',            provider: 'openai',    baseUrl: 'https://api.openai.com/v1',                        model: 'gpt-4o-mini',                  keyUrl: 'https://platform.openai.com/api-keys' },
-    { id: 'deepseek',   label: 'DeepSeek 深度求索',  provider: 'openai',    baseUrl: 'https://api.deepseek.com/v1',                      model: 'deepseek-chat',                keyUrl: 'https://platform.deepseek.com/api_keys' },
+    { id: 'deepseek',   label: 'DeepSeek 深度求索',  provider: 'openai',    baseUrl: 'https://api.deepseek.com/v1',                      model: 'deepseek-flash',               keyUrl: 'https://platform.deepseek.com/api_keys' },
     { id: 'qwen',       label: '阿里通义千问',        provider: 'openai',    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus',                   keyUrl: 'https://bailian.console.aliyun.com/' },
     { id: 'moonshot',   label: '月之暗面 Kimi',       provider: 'openai',    baseUrl: 'https://api.moonshot.cn/v1',                       model: 'moonshot-v1-8k',               keyUrl: 'https://platform.moonshot.cn/console/api-keys' },
     { id: 'zhipu',      label: '智谱 GLM',            provider: 'openai',    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',             model: 'glm-4-flash',                  keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys' },
@@ -182,6 +188,17 @@
 
   NS.LANG_MAP = Object.create(null);
   for (const l of NS.LANGUAGES) NS.LANG_MAP[l.code] = l;
+
+  /*
+   * 推理（思考）模型：翻译用不上推理，思考 token 往往是译文的数倍。
+   * 用于设置页提示；gpt-5-chat 系列是非推理模型，不在此列。
+   */
+  NS.isReasoningModel = function (model) {
+    const m = String(model || '').toLowerCase();
+    if (!m) return false;
+    if (/gpt-5[\w.-]*chat/.test(m)) return false;
+    return /reasoner|thinking|qwq|(^|[\/:_-])r1($|[\/:_-])|(^|\/)o[1-9](-|$)|(^|\/)gpt-5/.test(m);
+  };
 
   NS.langName = function (code, forPrompt) {
     const l = NS.LANG_MAP[code];

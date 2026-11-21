@@ -18,14 +18,45 @@
   const HARD_SKIP_TAGS = new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'PRE', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
     'OPTGROUP', 'SVG', 'MATH', 'CANVAS', 'IFRAME', 'OBJECT', 'EMBED', 'VIDEO', 'AUDIO', 'MAP',
-    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'DIALOG'
+    'AREA', 'HEAD', 'TITLE', 'META', 'LINK', 'BASE', 'TRACK', 'SOURCE', 'DIALOG', 'MJX-CONTAINER'
   ]);
 
   /* 这些行内元素不单独成单元，但其文本会并入所属块，避免句子被截断 */
   const INLINE_SOFT_SKIP = new Set(['CODE', 'KBD', 'SAMP', 'VAR', 'CITE', 'ABBR']);
 
-  const SKIP_CLASS_RE = /(^|[-_\s])(notranslate|no-?translate|skiptranslate|wpt-translation|wpt-ignore|hljs|highlight|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|MathJax|mwe-math-element|blob-code|linenumber)([-_\s]|$)/i;
-  const SKIP_ID_RE = /^(?:notranslate|no-?translate|wpt-)/i;
+  // 代码高亮的 highlight 只认完整类名（Pygments / Rouge / GitHub 的 highlight、highlight-source-*），
+  // 不能按片段匹配：Reddit 的 community-highlight-card（精选帖卡片）是正文
+  const SKIP_CLASS_RE = /(^|[-_\s])(wpt-translation|wpt-ignore|hljs|monaco-editor|CodeMirror|cm-editor|ace_editor|katex|mwe-math-element|blob-code|linenumber)([-_\s]|$)|(^|\s)(highlight|highlight-source-[\w-]+|highlighter-rouge)(\s|$)/i;
+  // MathJax 渲染产物的类名区分大小写（MathJax / MathJax_Display）；小写的 "mathjax" 只是「本块含公式、待渲染」的标记，
+  // 例如 arXiv 摘要 <blockquote class="abstract mathjax">，不能整块跳过
+  const MATHJAX_CLASS_RE = /(^|\s)MathJax(_\w+)?(\s|$)/;
+  const OPT_OUT_CLASS_RE = /(^|[-_\s])(notranslate|no-?translate|skiptranslate)([-_\s]|$)/i;
+  const SKIP_ID_RE = /^wpt-/i;
+  const OPT_OUT_ID_RE = /^(?:notranslate|no-?translate)/i;
+  const APP_SHELL_BLOCKS = 'p,li,h1,h2,h3,h4,article,section,blockquote,[role="article"]';
+  const optOutCache = new WeakMap();
+
+  /*
+   * 页面声明「不要翻译」（translate="no" / class="notranslate"）：
+   * 对具体元素（代码、人名、某一段）照常尊重；但 React/Vue 应用常把它挂在整个应用根节点上，
+   * 目的只是阻止浏览器自带翻译改写 DOM —— 此时整页都会被跳过（如 Mastodon）。
+   * 因此对「装着整页段落的外壳容器」忽略该声明，其内部更具体的声明仍然生效。
+   */
+  function optsOut(el) {
+    const cls = el.className;
+    const flagged = (el.getAttribute && el.getAttribute('translate') === 'no') ||
+      (typeof cls === 'string' && cls && OPT_OUT_CLASS_RE.test(cls)) ||
+      (typeof el.id === 'string' && el.id && OPT_OUT_ID_RE.test(el.id));
+    if (!flagged) return false;
+    let v = optOutCache.get(el);
+    if (v === undefined) {
+      const shell = el === document.body || el === document.documentElement ||
+        ((el.textContent || '').length > 600 && !!el.querySelectorAll && el.querySelectorAll(APP_SHELL_BLOCKS).length >= 3);
+      v = !shell;
+      optOutCache.set(el, v);
+    }
+    return v;
+  }
 
   const TABLE_STRUCT = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP', 'UL', 'OL', 'DL', 'SELECT', 'MENU']);
   const CELL_LIKE = new Set(['TD', 'TH', 'LI', 'DT', 'DD', 'CAPTION', 'SUMMARY', 'FIGCAPTION']);
@@ -38,17 +69,42 @@
     const tag = el.tagName;
     if (HARD_SKIP_TAGS.has(tag)) return true;
     if (el.hasAttribute && el.hasAttribute('data-wpt')) return true;
-    if (el.getAttribute && el.getAttribute('translate') === 'no') return true;
     if (el.isContentEditable) return true;
+    if (optsOut(el)) return true;
     const cls = el.className;
-    if (typeof cls === 'string' && cls && SKIP_CLASS_RE.test(cls)) return true;
+    if (typeof cls === 'string' && cls && (SKIP_CLASS_RE.test(cls) || MATHJAX_CLASS_RE.test(cls))) return true;
     const id = el.id;
     if (typeof id === 'string' && id && SKIP_ID_RE.test(id)) return true;
     return false;
   }
 
+  /*
+   * 「仅屏幕阅读器可见」的文字（.sr-only、跳转链接、图标按钮的隐藏标签）：checkVisibility 认为可见，
+   * 但用户看不到。翻译它们白花 token，译文还会作为可见的兄弟节点冒出来（如维基百科 ☰ 图标下的零散译文）。
+   * 识别常见写法：绝对定位 + 零面积 clip / clip-path: inset(50%) / 1px 尺寸且裁切溢出。
+   */
+  const CLIP_RECT_RE = /rect\(\s*(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px[\s,]+(-?[\d.]+)px\s*\)/;
+  function visuallyHidden(cs) {
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return false;
+    const m = cs.clip && cs.clip !== 'auto' ? CLIP_RECT_RE.exec(cs.clip) : null;
+    if (m && (Number(m[3]) <= Number(m[1]) || Number(m[2]) <= Number(m[4]))) return true;   // top>=bottom 或 left>=right
+    if (cs.clipPath && /^inset\(\s*(50|100)%/.test(cs.clipPath)) return true;
+    return cs.overflow !== 'visible' && parseFloat(cs.width) <= 1 && parseFloat(cs.height) <= 1;
+  }
+
   function isVisible(el) {
     if (el.hasAttribute && el.hasAttribute('hidden')) return false;
+    // 虚拟列表的离屏占位（如 Mastodon：固定高度 + overflow:hidden + opacity:0，内部是原始 HTML 文本）。
+    // 需要「透明」且「裁切或 aria-hidden」同时成立 —— 单独的 opacity:0 可能是滚动入场动画的初始状态。
+    try {
+      const cs = getComputedStyle(el);
+      // display:contents 自身不产生盒子，checkVisibility / getClientRects 恒为「不可见」；
+      // 可见性交给子元素逐个判定（MDN、Next.js、Reddit、BBC 等把整个 <main> 包在这种元素里）
+      if (cs.display === 'contents') return true;
+      if (visuallyHidden(cs)) return false;
+      if (cs.opacity === '0' && (cs.overflow === 'hidden' || cs.overflow === 'clip' ||
+          (el.getAttribute && el.getAttribute('aria-hidden') === 'true'))) return false;
+    } catch (e) { /* 继续 */ }
     if (typeof el.checkVisibility === 'function') {
       try { return el.checkVisibility({ visibilityProperty: true }); } catch (e) { /* 继续降级 */ }
     }
@@ -57,6 +113,8 @@
 
   function isBlockish(el, cs) {
     const d = cs.display;
+    // display:contents 的包装层自身不产生盒子，按容器处理（向内遍历），否则会把里面的按钮、段落拼成一句
+    if (d === 'contents') return el.childElementCount > 0;
     if (d === 'block' || d === 'flow-root' || d === 'list-item' || d === 'flex' || d === 'grid' ||
         d === 'table' || d === 'table-row' || d === 'table-row-group' || d === 'table-header-group' ||
         d === 'table-footer-group' || d === 'table-cell' || d === 'table-caption') return true;
@@ -71,32 +129,115 @@
   }
 
   /* 收集行内文本（含 <br> 换行），跳过硬过滤元素与不可见元素 */
-  function collectText(node, out, depth) {
-    for (let n = node.firstChild; n; n = n.nextSibling) {
+  /*
+   * 相邻的两个「独立」行内元素（链接、按钮、inline-block 徽章）之间没有空白时补一个空格：
+   * 页脚链接、标签列表在视觉上靠 CSS 间距 / 伪元素分隔，直接拼接会变成「AboutStatusPrivacy」。
+   * 普通 <span> 之间不补（它们可能是被高亮拆开的同一个单词）。
+   */
+  const SEPARATE_TAGS = new Set(['A', 'BUTTON', 'LABEL', 'IMG']);
+  function separate(el) {
+    if (SEPARATE_TAGS.has(el.tagName)) return true;
+    try { return getComputedStyle(el).display !== 'inline'; } catch (e) { return false; }
+  }
+  function pushGap(out, prev, n) {
+    if (!prev || prev.nodeType !== 1 || !(separate(prev) || separate(n))) return;
+    const last = out.length ? out[out.length - 1] : '';
+    if (last && !/\s$/.test(last)) out.push(' ');
+  }
+
+  /*
+   * 按「显示出来的样子」取子节点：行内宿主读影子树；<slot> 在 slots=true 时读投影进来的节点。
+   * slots=false 的场景（块级宿主的影子树里）投影内容由宿主的普通子节点那一路单独抽取，这里跳过以免重复。
+   */
+  function childList(node, slots, lightOnly) {
+    if (!lightOnly && node.nodeType === 1) {
+      const sr = shadowOf(node);
+      if (sr) return sr.childNodes;
+      if (node.tagName === 'SLOT') {
+        const assigned = node.assignedNodes({ flatten: true });
+        if (assigned.length) return slots ? assigned : [];
+      }
+    }
+    return node.childNodes;
+  }
+
+  /*
+   * 源码里的换行只有在 white-space 保留换行（pre / pre-wrap / pre-line）时才显示；
+   * 默认的 normal 下它只是排版用的空白，当成空格，否则译文（pre-wrap）会凭空多出空行。
+   */
+  function textValue(t) {
+    const v = t.nodeValue;
+    if (v.indexOf('\n') < 0) return v;
+    const p = t.parentElement;
+    let ws = 'normal';
+    try { ws = p ? getComputedStyle(p).whiteSpace : 'normal'; } catch (e) { /* 忽略 */ }
+    return ws === 'normal' || ws === 'nowrap' ? v.replace(/\n/g, ' ') : v;
+  }
+
+  /*
+   * 句子里标了 translate="no" / notranslate 的行内片段（Sphinx 给每个行内代码都加 notranslate：
+   * <code class="docutils literal notranslate">+</code>）意思是「这几个字别翻」，不是「当它不存在」：
+   * 原样保留在句子里，否则送去翻译的是「the operators , , and can be used」，译文同样缺字。
+   */
+  const VERBATIM = '\u2063';                 // 标记原样保留的片段，建单元时据此判断「除此之外还有没有要翻的字」
+  const VERBATIM_RE = /\u2063[^\u2063]*\u2063/g;
+  function keepVerbatim(n) {
+    if (HARD_SKIP_TAGS.has(n.tagName) || !optsOut(n)) return false;
+    const t = n.textContent || '';
+    if (!t.trim() || t.length > 200) return false;
+    let cs = null;
+    try { cs = getComputedStyle(n); } catch (e) { return false; }
+    return /^inline/.test(cs.display) && isVisible(n);
+  }
+
+  /* 字号为 0 的元素里的文字看不见（Notion 帮助中心的卡片：标题文字设 font-size:0，显示的是图片）；子元素可以重设字号，只管直接文字 */
+  function zeroFont(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try { return parseFloat(getComputedStyle(el).fontSize) === 0; } catch (e) { return false; }
+  }
+
+  function collectText(node, out, depth, slots, lightOnly) {
+    let prev = null;
+    let mute = null;
+    const kids = childList(node, slots, lightOnly);
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
       if (n.nodeType === 3) {
-        if (n.nodeValue) out.push(n.nodeValue);
+        if (!n.nodeValue) continue;
+        if (mute === null && n.nodeValue.trim()) mute = zeroFont(node);
+        if (!mute) { out.push(textValue(n)); prev = n; }
         continue;
       }
       if (n.nodeType !== 1) continue;
-      if (n.tagName === 'BR') { out.push('\n'); continue; }
-      if (isHardSkip(n)) continue;
+      if (n.tagName === 'BR') { out.push('\n'); prev = n; continue; }
+      if (isHardSkip(n)) {
+        if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); prev = n; }
+        continue;
+      }
       if (depth < 40 && !isVisible(n)) continue;
-      collectText(n, out, depth + 1);
+      pushGap(out, prev, n);
+      collectText(n, out, depth + 1, slots || !!shadowOf(n), false);
+      prev = n;
     }
     return out;
   }
 
+  /* 单元元素自身若是宿主，其影子树由 walkShadow 单独抽取，这里只读普通子节点 */
   function inlineTextOf(node) {
-    return collectText(node, [], 0).join('');
+    return collectText(node, [], 0, false, true).join('');
   }
 
   function inlineTextOfNodes(nodes) {
     const out = [];
+    let prev = null;
+    const mute = nodes.length > 0 && zeroFont(nodes[0].parentNode);
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      if (n.nodeType === 3) { if (n.nodeValue) out.push(n.nodeValue); }
+      if (n.nodeType === 3) { if (n.nodeValue && !mute) out.push(textValue(n)); }
       else if (n.tagName === 'BR') out.push('\n');
-      else if (!isHardSkip(n)) collectText(n, out, 0);
+      else if (!isHardSkip(n)) { pushGap(out, prev, n); collectText(n, out, 0, !!shadowOf(n), false); }
+      else if (keepVerbatim(n)) { pushGap(out, prev, n); out.push(VERBATIM + n.textContent + VERBATIM); }
+      prev = n;
     }
     return out.join('');
   }
@@ -115,10 +256,78 @@
     return U.visualLength(text) < 40;
   }
 
-  function pushUnit(ctx, el, text, kind, anchorNode) {
+  /*
+   * 控件组：<p><button>Accept all</button> <button>Manage</button></p> 这类只由短按钮 / 短链接
+   * 组成的块。整块合成一句会把几个标签拼成一段怪文，还会让仅译文模式丢掉按钮外观；
+   * 因此每个控件单独成单元，译文随后以行内方式放进控件自身。
+   */
+  const CONTROL_TAGS = new Set(['BUTTON', 'A', 'LABEL']);
+  function controlGroup(el) { return controlGroupOf(el.childNodes, 2); }
+
+  function controlGroupOf(list, min) {
+    const kids = [];
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i];
+      if (n.nodeType === 3) { if (/[\p{L}\p{N}]/u.test(n.nodeValue || '')) return null; continue; }
+      if (n.nodeType !== 1 || isHardSkip(n) || !isVisible(n)) continue;
+      if (n.tagName === 'BR') continue;
+      let ok = CONTROL_TAGS.has(n.tagName);
+      if (!ok) {
+        const d = getComputedStyle(n).display;
+        ok = d === 'inline-block' || d === 'inline-flex';
+      }
+      if (!ok || U.visualLength(n.textContent) > 28) return null;
+      kids.push(n);
+    }
+    return kids.length >= min ? kids : null;
+  }
+
+  /*
+   * 短按钮（关注 / 点赞 / 接受 等界面控件）不翻译：用户一看就懂，
+   * 而行内追加译文会把按钮撑宽、挤压旁边的用户名等内容。长文本按钮（如整句的提示条）照常翻译。
+   */
+  const BUTTON_CLASS_RE = /(^|[\s_-])(btn|button)([\s_-]|$)/i;
+  const CONTROL_ROLES = new Set(['button', 'tab', 'menuitem', 'switch', 'checkbox', 'radio', 'option']);
+  function isShortControl(el, text) {
+    if (!el || el.nodeType !== 1) return false;
+    // 文字可能包在按钮内部的 div/span 里（React Native Web、各类组件库），所以向上找最近的控件
+    let ctl = null;
+    for (let c = el, d = 0; c && d < 5; c = c.parentElement, d++) {
+      const role = c.getAttribute && c.getAttribute('role');
+      const cls = typeof c.className === 'string' ? c.className : '';
+      if (c.tagName === 'BUTTON' || (role && CONTROL_ROLES.has(role)) ||
+          (c.tagName === 'A' && BUTTON_CLASS_RE.test(cls))) { ctl = c; break; }   // <a class="button"> 样式的按钮
+    }
+    if (!ctl) return false;
+    return U.visualLength(ctl.textContent || text) <= 28;
+  }
+
+  const HTML_LIKE_RE = /<\/?[a-z][a-z0-9-]*[\s>\/]/i;
+  const HTML_TAG_RE = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi;
+
+  function tagCount(s) {
+    return (s.match(HTML_TAG_RE) || []).length;
+  }
+  function codeTagCount(el) {
+    let n = 0;
+    const list = el && el.querySelectorAll ? el.querySelectorAll('code,kbd,samp,tt,var') : [];
+    for (let i = 0; i < list.length && i < 50; i++) n += tagCount(list[i].textContent || '');
+    return n;
+  }
+
+  function pushUnit(ctx, el, text, kind, anchorNode, nodes) {
     if (ctx.units.length >= MAX_UNITS) return;
-    const norm = U.normalizeText(text);
-    if (!U.isTranslatable(norm, ctx.settings)) return;
+    let norm = U.normalizeText(text);
+    if (norm.indexOf(VERBATIM) >= 0) {
+      // 只有「不翻译」片段（整块就是一个品牌名 / 一段代码）不值得送翻
+      if (!U.isTranslatable(U.normalizeText(norm.replace(VERBATIM_RE, ' ')), ctx.settings, true)) return;
+      norm = U.normalizeText(norm.replace(/\u2063/g, ''));
+    }
+    if (!U.isTranslatable(norm, ctx.settings, true)) return;
+    if (kind === 'full' && isShortControl(el, norm)) return;
+    // 兜底：看起来是序列化的 HTML（虚拟列表占位、隐藏的无障碍副本）绝不送去翻译
+    // 写在 <code> 里的标签是文档在讲解 HTML（MDN、React 文档），不算
+    if (HTML_LIKE_RE.test(norm) && tagCount(norm) - codeTagCount(el) >= 3) return;
     ctx.seq++;
     ctx.units.push({
       id: ctx.seq,
@@ -127,8 +336,47 @@
       text: norm,
       kind: kind,                       // 'full' | 'partial'
       anchorNode: anchorNode || null,
+      nodes: nodes || null,             // 'partial' 单元的行内节点（仅译文模式隐藏原文时用）
       unit: true
     });
+  }
+
+  /*
+   * 影子树（Web Components：MSN、Salesforce、Reddit 的 shreddit-*）：open 直接可读；
+   * closed 只能用扩展专用的 chrome.dom API，且只有自定义元素（标签名带连字符）才值得查，避免逐元素调用。
+   */
+  const DOM_API = globalThis.chrome && chrome.dom && typeof chrome.dom.openOrClosedShadowRoot === 'function'
+    ? chrome.dom.openOrClosedShadowRoot : null;
+  function shadowOf(el) {
+    if (el.shadowRoot) return el.shadowRoot;
+    if (DOM_API && el.tagName.indexOf('-') > 0) { try { return DOM_API(el) || null; } catch (e) { /* 忽略 */ } }
+    return null;
+  }
+
+  /*
+   * 自定义元素默认 display:inline，组件作者常常不写 :host{display:block}；
+   * 影子树第一层里有块级内容（卡片、列表）的宿主按容器处理，否则会被当成一段行内文字整块拼接。
+   */
+  function hostOfBlocks(el) {
+    const sr = shadowOf(el);
+    if (!sr) return false;
+    let i = 0;
+    for (let c = sr.firstElementChild; c && i < 30; c = c.nextElementSibling, i++) {
+      if (HARD_SKIP_TAGS.has(c.tagName)) continue;
+      let cs = null;
+      try { cs = getComputedStyle(c); } catch (e) { continue; }
+      if (isBlockish(c, cs)) return true;
+    }
+    return false;
+  }
+
+  /* 影子根本身不是元素（没有样式、不能作为插入锚点），逐个子元素当作独立块遍历；直接挂在根下的裸文本极少，忽略 */
+  function walkShadow(root, ctx, depth) {
+    ctx.shadowRoots.push(root);
+    for (let n = root.firstElementChild; n; n = n.nextElementSibling) {
+      if (isHardSkip(n) || !isVisible(n)) continue;
+      walk(n, ctx, depth + 1, getComputedStyle(n));
+    }
   }
 
   function walk(el, ctx, depth, selfStyle) {
@@ -137,6 +385,8 @@
     // 行内代码用元素一旦被 CSS 变成块级容器（例如 div > code{display:block}），
     // 整块都是代码，必须跳过；而行内的 <code> 仍会作为句子的一部分参与翻译。
     if (INLINE_SOFT_SKIP.has(el.tagName)) return;
+    const sr = shadowOf(el);
+    if (sr) walkShadow(sr, ctx, depth);      // 宿主的普通子节点（经 slot 投影显示）照常在下面处理
 
     const inlineNodes = [];
     const blockKids = [];
@@ -147,34 +397,46 @@
       if (isHardSkip(n)) continue;
       if (!isVisible(n)) continue;
       const cs = getComputedStyle(n);
-      if (isBlockish(n, cs)) { blockKids.push(n); blockStyles.push(cs); }
+      if (isBlockish(n, cs) || hostOfBlocks(n)) { blockKids.push(n); blockStyles.push(cs); }
       else inlineNodes.push(n);
     }
 
     if (!blockKids.length) {
       // 叶子块：整段文本就是一个翻译单元
       const text = inlineTextOf(el);
-      if (!isUiStrip(selfStyle, text)) pushUnit(ctx, el, text, 'full', null);
+      if (isUiStrip(selfStyle, text)) return;
+      const group = controlGroup(el);
+      if (group) {
+        for (let i = 0; i < group.length; i++) pushUnit(ctx, group[i], inlineTextOf(group[i]), 'full', null);
+        return;
+      }
+      pushUnit(ctx, el, text, 'full', null);
       return;
     }
 
     // 混合元素：行内部分单独成单元，插入在最后一个行内节点之后
     if (inlineNodes.length) {
       const text = inlineTextOfNodes(inlineNodes);
-      if (!isUiStrip(selfStyle, text)) {
-        pushUnit(ctx, el, text, 'partial', inlineNodes[inlineNodes.length - 1]);
+      // 段落之后跟着一排按钮 / 链接（如「创建账号」「登录」）：逐个控件处理，不拼成一句
+      const group = controlGroupOf(inlineNodes, 1);
+      if (group) {
+        for (let i = 0; i < group.length; i++) pushUnit(ctx, group[i], inlineTextOf(group[i]), 'full', null);
+      } else if (!isUiStrip(selfStyle, text)) {
+        pushUnit(ctx, el, text, 'partial', inlineNodes[inlineNodes.length - 1], inlineNodes);
       }
     }
     for (let i = 0; i < blockKids.length; i++) walk(blockKids[i], ctx, depth + 1, blockStyles[i]);
   }
 
   function collect(root, settings) {
-    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0 };
+    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [] };
     const start = root || document.body;
     if (!start) return [];
     let rootStyle = null;
     try { rootStyle = getComputedStyle(start); } catch (e) {}
     walk(start, ctx, 0, rootStyle);
+    // 途经的影子根：MutationObserver 看不到影子树内部的变化，内容脚本需要逐个追加观察
+    ctx.units.shadowRoots = ctx.shadowRoots;
     return ctx.units;
   }
 
@@ -205,7 +467,22 @@
     return idx.map(function (i) { return units[i]; });
   }
 
+  /* 节点及其祖先是否真的显示在页面上（增量扫描的起点可能位于隐藏的占位容器内部） */
+  function isRendered(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!el) return false;
+    // display:contents 的节点自身没有盒子，checkVisibility 恒为假；交给下面逐级的 isVisible 判定
+    if (typeof el.checkVisibility === 'function' && getComputedStyle(el).display !== 'contents') {
+      try { if (!el.checkVisibility({ visibilityProperty: true })) return false; } catch (e) { /* 忽略 */ }
+    }
+    for (let c = el, d = 0; c && c !== document.body && d < 60; c = c.parentElement, d++) {
+      if (!isVisible(c)) return false;
+    }
+    return true;
+  }
+
   NS.Extractor = {
+    isRendered: isRendered,
     collect: collect,
     byViewportPriority: byViewportPriority,
     isHardSkip: isHardSkip,

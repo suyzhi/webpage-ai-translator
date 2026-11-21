@@ -4,14 +4,15 @@
  * 用法：
  *   node tools/mock-ai-server.mjs                                  # 默认端口 8931
  *   node tools/mock-ai-server.mjs --dict demo/showcase-dict.json    # 使用词典给出真实译文
+ *   node tools/mock-ai-server.mjs --copy-proper                     # 像真实模型一样原样返回人名 / 品牌
  *
  * 然后在扩展设置里填：
  *   Base URL: http://127.0.0.1:8931/v1     API 密钥: 留空（本地地址免密钥）     模型: 任意
  *
  * 端点：
  *   GET  /<path>                  以仓库根目录为根提供静态文件
- *   GET  /__stats                 返回请求数 / 批次数等统计
- *   POST /v1/chat/completions     按 <t id="n">…</t> 批量协议返回译文
+ *   GET  /__stats                 返回请求数 / 批次数 / 峰值并发等统计
+ *   POST /v1/chat/completions     按「N|文本」行协议返回译文
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -29,6 +30,18 @@ const PORT = Number(arg('port', 8931));
 const DICT_PATH = arg('dict', '');
 const PREFIX = arg('prefix', '【译】');
 const DELAY = Number(arg('delay', 140));
+const COPY_PROPER = process.argv.includes('--copy-proper');
+/* 常见界面词：真实模型会翻译它们，即便首字母大写 */
+const UI_WORDS = new Set(['home', 'explore', 'notifications', 'messages', 'bookmarks', 'profile', 'follow', 'following', 'search', 'settings']);
+
+/* 人名 / 品牌 / 专有名词：不超过 5 个词、没有 3 个字母以上的小写开头单词、且不是常见界面词 */
+function looksProper(s) {
+  if (!/^[\sA-Za-z\u00c0-\u024f.'\-]+$/.test(s)) return false;     // 只模拟拉丁字母的人名 / 品牌
+  const words = s.trim().split(/\s+/);
+  if (!words.length || words.length > 5 || /\n/.test(s)) return false;
+  if (words.length === 1 && UI_WORDS.has(words[0].toLowerCase())) return false;
+  return !words.some((w) => /^[a-z]{3,}/.test(w));
+}
 
 let DICT = null;
 if (DICT_PATH) {
@@ -36,15 +49,30 @@ if (DICT_PATH) {
   console.log('已加载词典 ' + DICT_PATH + '（' + Object.keys(DICT).length + ' 条）');
 }
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const unesc = (s) => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-  .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 
-const stats = { requests: 0, segments: 0, batches: [], startedAt: Date.now() };
+const stats = { requests: 0, segments: 0, batches: [], texts: [], inflight: 0, peak: 0, startedAt: Date.now() };
+
+/*
+ * 伪中文：长度接近真实英译中（约 0.32 个汉字 / 原文字符，如 30 字符的 "Open source software is great." → 7 字），
+ * 保留数字与换行。用于版面评测（tools/eval-layout.mjs）：译文长度真实、结果可复现、无需密钥。
+ */
+const PSEUDO_ZH = process.argv.includes('--pseudo-zh');
+const ZH_POOL = '这是一段用于版面评估的模拟译文内容长度与真实翻译大致相当便于检查排版效果';
+function pseudoZh(segment) {
+  return segment.split('\n').map((line) => {
+    const n = Math.max(2, Math.round(line.replace(/\s+/g, '').length * 0.32));
+    let out = '';
+    for (let i = 0; i < n; i++) out += ZH_POOL[i % ZH_POOL.length];
+    const nums = line.match(/\d[\d.,:%]*/g);
+    return (nums ? nums.slice(0, 3).join(' ') + ' ' : '') + out + (/[.!?。！？]$/.test(line.trim()) ? '。' : '');
+  }).join('\n');
+}
 
 function translate(segment) {
   const key = segment.replace(/\s+/g, ' ').trim();
   if (DICT && Object.prototype.hasOwnProperty.call(DICT, key)) return DICT[key];
+  if (COPY_PROPER && looksProper(key)) return segment;
+  if (PSEUDO_ZH) return pseudoZh(segment);
   return PREFIX + segment;
 }
 
@@ -63,21 +91,52 @@ const server = http.createServer((req, res) => {
       let json = {};
       try { json = JSON.parse(body); } catch (e) {}
       const user = ((json.messages || []).find((m) => m.role === 'user') || {}).content || '';
-      const segs = [...user.matchAll(/<t id="(\d+)">([\s\S]*?)<\/t>/g)];
+      // 行协议：每段一行「N|文本」，段内换行为 <br>
+      const segs = [...user.matchAll(/^(\d+)\|(.*)$/gm)].map((m) => [m[0], m[1], m[2].replace(/<br>/g, '\n')]);
       stats.requests++;
       stats.segments += segs.length;
       stats.batches.push(segs.length);
+      for (const m of segs) stats.texts.push(m[2]);
+      stats.inflight++;
+      stats.peak = Math.max(stats.peak, stats.inflight);
       console.log('[mock] 请求 #' + stats.requests + '：' + segs.length + ' 段' + (json.model ? '（模型 ' + json.model + '）' : ''));
       const content = segs
-        .map((m) => '<t id="' + m[1] + '">' + esc(translate(unesc(m[2]))) + '</t>')
+        .map((m) => m[1] + '|' + translate(m[2]).replace(/\r?\n/g, '<br>'))
         .join('\n');
+      if (json.stream) {
+        // SSE：每段一个 chunk，间隔 DELAY/段数，最后一个 chunk 带 usage（同 DeepSeek 的 include_usage）
+        stats.streamed = (stats.streamed || 0) + 1;
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const lines = content.split('\n');
+        const p = Math.ceil(user.length / 4) + 50, c = Math.ceil(content.length / 4);
+        const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
+        let i = 0;
+        const tick = () => {
+          if (i < lines.length) {
+            send({ choices: [{ index: 0, delta: { content: (i ? '\n' : '') + lines[i] } }] });
+            i++;
+            setTimeout(tick, Math.max(5, Math.round(DELAY / lines.length)));
+            return;
+          }
+          send({ choices: [], usage: { prompt_tokens: p, completion_tokens: c, total_tokens: p + c, prompt_cache_hit_tokens: 50 } });
+          res.end('data: [DONE]\n\n');
+          stats.inflight--;
+        };
+        tick();
+        return;
+      }
       setTimeout(() => {
+        stats.inflight--;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           id: 'mock-completion', object: 'chat.completion', created: Math.floor(Date.now() / 1000),
           model: json.model || 'mock',
           choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          // 粗略估算（约 4 字符 / token），让端到端测试能验证用量统计链路
+          usage: (() => {
+            const p = Math.ceil(user.length / 4) + 50, c = Math.ceil(content.length / 4);
+            return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c, prompt_cache_hit_tokens: 50 };
+          })()
         }));
       }, DELAY);
     });

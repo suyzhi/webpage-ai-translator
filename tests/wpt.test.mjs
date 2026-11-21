@@ -105,6 +105,61 @@ test('isTranslatable 过滤无效片段', () => {
   assert.equal(U.isTranslatable('\u8fd9\u5df2\u7ecf\u662f\u4e2d\u6587\u4e86', s), false);
 });
 
+test('isTranslatable：社交媒体里的标识、计数、时间不送去翻译', () => {
+  const s = { minTextLength: 2, skipTargetLang: true, targetLang: 'zh-CN' };
+  for (const t of ['@Arnau_fnv', '@Arnau_fnv @Arnau_fn', '@zaijiang@me.ns.ci', 'Mastodon @Mastodon', 'Ea Nasir V de Ur @Arnau_fnv', '#WednesdayWisdom', '$EDEL', '#AI · #LLM',
+    '27\u4e07', '3h', '1.2K', '2-1', '0:01', '4,931', 'v2']) {
+    assert.equal(U.isTranslatable(t, s), false, t);
+  }
+  for (const t of ['2 days ago', 'Who to follow', 'email me at @home please']) {
+    assert.equal(U.isTranslatable(t, s), true, t);
+  }
+});
+
+test('isTranslatable：日历刻度与人人认得的界面词不翻（GitHub 贡献图「Jan 1月」「More 较多」）', () => {
+  const s = { minTextLength: 2, skipTargetLang: true, targetLang: 'zh-CN' };
+  for (const t of ['Jan', 'Mon', 'Wed', 'Oct 18, 2026', 'October 2026', 'Mon, 5 Oct', 'Mon 10:30 AM', 'Sept. 3',
+    'More', 'Less', 'Sign in', 'Show more', 'Read more \u2192', 'See all \u203a']) {
+    assert.equal(U.isTranslatable(t, s), false, t);
+  }
+  for (const t of ['Monday blues are real', 'January sales start now', 'More than a feeling', 'Sign in to continue', 'Less is more',
+    'March Madness', 'Mon Amour', 'Dec 2026 release notes', 'Sat on the mat', 'Today', 'Learn how we count contributions']) {
+    assert.equal(U.isTranslatable(t, s), true, t);
+  }
+});
+
+test('pickTerms：挑多段反复出现的术语，单复数只留一个，月份和停用词不算', () => {
+  const texts = ['Attach a shadow root to the host element.', 'The shadow root holds the shadow tree.', 'Each shadow root is private.',
+    'Components render UI.', 'A component returns markup.', 'Reuse components freely.', 'One component per file.', 'Small components win.', 'Name the component.', 'Released in March 2024.', 'March 2025 update.', 'Since March.'];
+  const t = U.pickTerms(texts, 8).map((x) => x.term.toLowerCase());
+  assert.ok(t.includes('shadow root'), JSON.stringify(t));
+  assert.equal(t.filter((x) => /^components?$/.test(x)).length, 1, JSON.stringify(t));
+  assert.ok(!t.some((x) => /march/.test(x)), JSON.stringify(t));
+  assert.deepEqual(U.pickTerms(texts, 8, 4), []);
+  assert.ok(U.pickTerms(texts, 8)[0].sample.length <= 90);
+});
+
+test('isProbablyTargetLang：中文句子夹英文术语仍判为中文，英文句子夹个别汉字仍判为外文', () => {
+  assert.equal(U.isProbablyTargetLang('OpenAI \u53d1\u5e03 GPT \u6a21\u578b', 'zh-CN'), true);
+  assert.equal(U.isProbablyTargetLang('\u6211\u7ed9\u5404\u79cd AI \u63d0\u51fa\u4e86\u4ee5\u4e0b\u63d0\u793a', 'zh-CN'), true);
+  assert.equal(U.isProbablyTargetLang('I really love visiting \u5317\u4eac in the spring', 'zh-CN'), false);
+});
+
+test('sameText：模型原样返回（忽略大小写、空白、标点）视为无需显示', () => {
+  assert.equal(U.sameText('Ea Nasir V de Ur', 'Ea Nasir V de Ur'), true);
+  assert.equal(U.sameText('NFL', 'nfl.'), true);
+  assert.equal(U.sameText('Chris Ilitch', '\u514b\u91cc\u65af\u00b7\u4f0a\u5229\u5947'), false);
+  assert.equal(U.sameText('', ''), false);
+});
+
+test('baseLang：语言代码归一（含 CLD 旧代码）', () => {
+  assert.equal(U.baseLang('zh-CN'), 'zh');
+  assert.equal(U.baseLang('pt-BR'), 'pt');
+  assert.equal(U.baseLang('iw'), 'he');
+  assert.equal(U.baseLang('nb'), 'no');
+  assert.equal(U.baseLang('EN_us'), 'en');
+});
+
 /* ---------------- 批量打包 ---------------- */
 test('planBatches 贪心装箱且首批更小', () => {
   const items = [];
@@ -191,15 +246,25 @@ test('buildSystem 包含目标语言与自定义指令', () => {
   assert.ok(sys.includes('Japanese'));
   assert.ok(sys.includes('English'));
   assert.ok(sys.includes('\u4fdd\u7559\u672f\u8bed'));
-  assert.ok(sys.includes('<t id="N">'));
+  assert.ok(sys.includes('N|text'));
 });
 
-test('buildUser 生成规范的批量协议', () => {
-  const user = WPT.prompt.buildUser([{ id: 1, text: 'Hello &amp; bye' }, { id: 2, text: 'Second' }]);
-  assert.equal(user, '<t id="1">Hello &amp; bye</t>\n<t id="2">Second</t>');
+test('buildUser 生成行协议：不做 XML 转义，段内换行编码为 <br>', () => {
+  const user = WPT.prompt.buildUser([{ id: 1, text: 'Tom & <Jerry>' }, { id: 2, text: 'Line one\nLine two' }]);
+  assert.equal(user, '1|Tom & <Jerry>\n2|Line one<br>Line two');
 });
 
-test('parse 解析标准返回', () => {
+test('parse 解析行协议：<br> 还原换行、续行并入上一段、重复编号取第一次', () => {
+  const m = WPT.prompt.parse('1|你好<br>世界\n2| A & B \n续行\n2|重复\n3|x|y');
+  assert.equal(m.get(1), '你好\n世界');
+  assert.equal(m.get(2), 'A & B\n续行');
+  assert.equal(m.get(3), 'x|y', '只按第一个竖线切分');
+  const fenced = WPT.prompt.parse('```\n1|你好\n2|世界\n```');
+  assert.equal(fenced.get(2), '世界');
+});
+
+test('parse 兼容旧标签协议（并做 XML 反转义）', () => {
+  assert.equal(WPT.prompt.parse('<t id="1">A &amp; B</t>').get(1), 'A & B');
   const m = WPT.prompt.parse('<t id="1">\u4f60\u597d</t>\n<t id="2">\u4e16\u754c</t>');
   assert.equal(m.get(1), '\u4f60\u597d');
   assert.equal(m.get(2), '\u4e16\u754c');
@@ -254,7 +319,7 @@ test('providers.makeError 正确分类可重试 / 致命 / 可拆分', () => {
 /* ---------------- 设置规范化 ---------------- */
 test('settings.normalize 补齐默认值并夹紧范围', () => {
   const s = WPT.settings.normalize({ concurrency: 999, batchChars: 5, targetLang: 'xx', markStyle: 'nope', displayMode: 'weird' });
-  assert.equal(s.concurrency, 16);
+  assert.equal(s.concurrency, 32);
   assert.equal(s.batchChars, 200);
   assert.equal(s.targetLang, 'zh-CN');
   assert.equal(s.markStyle, 'none');
@@ -317,6 +382,18 @@ test('describeError 给出可读中文提示', () => {
   assert.match(U.describeError(WPT.providers.makeError(401, '')), /密钥/);
   assert.match(U.describeError(WPT.providers.makeError(429, '')), /速率/);
   assert.match(U.describeError(WPT.providers.makeError(404, '')), /模型/);
+  // DeepSeek：余额不足 402、模型名写错 400（列出可用模型）都应是致命错误，并给出可操作的中文提示
+  const broke = WPT.providers.makeError(402, '{"error":{"message":"Insufficient Balance"}}');
+  assert.equal(broke.fatal, true);
+  assert.match(U.describeError(broke), /余额不足.*充值/);
+  const typo = WPT.providers.makeError(400, '{"error":{"message":"The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-flsh. (request_id: x)"}}');
+  assert.equal(typo.fatal, true);
+  assert.equal(typo.split, false);
+  assert.match(U.describeError(typo), /模型名有误.*deepseek-flash, deepseek-v4-pro/);
+  // 真正的上下文过长仍然拆分重试
+  const long = WPT.providers.makeError(400, 'This model\'s maximum context length is 65536 tokens');
+  assert.equal(long.split, true);
+  assert.equal(long.fatal, false);
 });
 
 /* ---------------- 语言表 ---------------- */
@@ -446,4 +523,51 @@ test('autoRegistrationFor：脏数据也不会生成无效的匹配模式', () =
   ]);
   assert.equal(U.autoRegistrationFor({ siteRules: 'garbage' }), null);
   assert.deepEqual(U.autoRegistrationFor({ autoTranslate: true, siteRules: [1, 2] }), { matches: ALL_PAGES });
+});
+
+/* ---------------- 设置迁移与推理模型识别 ---------------- */
+test('settings：旧版默认批次大小一次性迁移，用户自定义值与已迁移的设置不动', () => {
+  const S = WPT.settings;
+  const old = S.normalize({ batchChars: 1200, batchItems: 16 });
+  assert.equal(old.batchChars, 5000);
+  assert.equal(old.batchItems, 64);
+  const prev = S.normalize({ batchChars: 2000, batchItems: 24, settingsRev: 3 });
+  assert.equal(prev.batchChars, 5000, '上一版默认值同样升级');
+  assert.equal(prev.batchItems, 64);
+  assert.equal(S.normalize({ batchChars: 2000, batchItems: 24, settingsRev: 4 }).batchChars, 2000, '新版里用户主动设成 2000 应保留');
+  assert.equal(old.settingsRev, WPT.SETTINGS_REV);
+  const custom = S.normalize({ batchChars: 1500, batchItems: 10 });
+  assert.equal(custom.batchChars, 1500);
+  assert.equal(custom.batchItems, 10);
+  assert.equal(S.normalize({ batchChars: 1200, batchItems: 16, settingsRev: 2 }).batchChars, 1200, '迁移后用户再改回 1200 应保留');
+});
+
+test('settings：DeepSeek 官方的 deepseek-chat 别名迁移为 deepseek-flash，其他平台与已迁移设置不动', () => {
+  const S = WPT.settings;
+  assert.equal(S.normalize({ baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', settingsRev: 2 }).model, 'deepseek-flash');
+  assert.equal(S.normalize({ baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-chat', settingsRev: 2 }).model, 'deepseek-chat');
+  assert.equal(S.normalize({ baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', settingsRev: 3 }).model, 'deepseek-chat');
+  assert.equal(WPT.PRESETS.find((p) => p.id === 'deepseek').model, 'deepseek-flash');
+});
+
+test('settings：兼容迁移旧版 autoSites / neverSites 到 siteRules', () => {
+  const S = WPT.settings;
+  const onlyList = S.normalize({ autoTranslate: true, autoSites: ['https://Example.com/path', '*.foo.org'], neverSites: ['ads.example.com'], settingsRev: 5 });
+  assert.equal(onlyList.autoTranslate, false, '旧版 autoSites 非空表示仅翻这些站点，迁移后关闭全局开关');
+  assert.deepEqual(onlyList.siteRules, { 'example.com': 'always', 'foo.org': 'always', 'ads.example.com': 'never' });
+  assert.equal(onlyList.autoSites, undefined);
+  assert.equal(onlyList.neverSites, undefined);
+
+  const allButNever = S.normalize({ autoTranslate: true, autoSites: [], neverSites: ['bilibili.com'], settingsRev: 5 });
+  assert.equal(allButNever.autoTranslate, true, '旧版 autoSites 为空时保留全站自动翻译');
+  assert.deepEqual(allButNever.siteRules, { 'bilibili.com': 'never' });
+
+  const offWithList = S.normalize({ autoTranslate: false, autoSites: ['a.com'], neverSites: ['b.com'], settingsRev: 5 });
+  assert.equal(offWithList.autoTranslate, false);
+  assert.deepEqual(offWithList.siteRules, { 'b.com': 'never' }, '旧版总开关关闭时 autoSites 不应自动激活');
+});
+
+test('isReasoningModel：识别推理模型，不误伤普通对话模型', () => {
+  for (const m of ['deepseek-reasoner', 'deepseek-r1', 'o3-mini', 'openai/o1', 'gpt-5', 'qwq-32b', 'qwen3-235b-a22b-thinking-2507']) assert.equal(WPT.isReasoningModel(m), true, m);
+  for (const m of ['deepseek-chat', 'gpt-4o-mini', 'gpt-5-chat-latest', 'claude-3-5-haiku-latest', 'glm-4-flash', 'llama-3.3-70b-versatile', '']) assert.equal(WPT.isReasoningModel(m), false, m);
 });
