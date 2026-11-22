@@ -4,7 +4,7 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.CONST_READY) return;
   NS.CONST_READY = true;
 
@@ -33,7 +33,13 @@
     TOGGLE: 'wpt:toggle',
     NOTIFY: 'wpt:notify',
     USAGE: 'wpt:usage',
-    USAGE_RESET: 'wpt:usage-reset'
+    USAGE_RESET: 'wpt:usage-reset',
+    STATE: 'wpt:state',
+    STATE_CHANGED: 'wpt:state-changed',
+    FRAMES: 'wpt:frames',
+    FRAME_CMD: 'wpt:frame-cmd',
+    FRAME_STATUS: 'wpt:frame-status',
+    OPEN_OPTIONS: 'wpt:open-options'
   };
 
   NS.STATUS = {
@@ -210,9 +216,15 @@
   NS.CONTENT_FILES = [
     'src/shared/constants.js',
     'src/shared/util.js',
+    'src/shared/site-rules.js',
     'src/shared/settings.js',
     'src/content/extract.js',
     'src/content/render.js',
+    'src/content/toast.js',
+    'src/content/plaintext.js',
+    'src/content/frames.js',
+    'src/content/observer.js',
+    'src/content/render-queue.js',
     'src/content/content.js'
   ];
 })();

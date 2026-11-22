@@ -4,6 +4,8 @@
 importScripts(
   '../shared/constants.js',
   '../shared/util.js',
+  '../shared/site-rules.js',
+  '../shared/concurrency.js',
   '../shared/settings.js',
   '../shared/prompt.js',
   './providers.js',
@@ -20,10 +22,6 @@ importScripts(
   let keepAlive = null;
 
   /* ---------------- 工具 ---------------- */
-
-  function isLocalUrl(url) {
-    return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?/i.test(String(url || ''));
-  }
 
   function safePost(port, msg) {
     try { port.postMessage(msg); return true; } catch (e) { return false; }
@@ -157,7 +155,7 @@ importScripts(
     const settings = Object.assign({}, base, msg.overrides || {});
     const items = Array.isArray(msg.items) ? msg.items : [];
 
-    if (!settings.apiKey && !isLocalUrl(settings.baseUrl)) {
+    if (!settings.apiKey && !U.isLocalUrl(settings.baseUrl)) {
       safePost(port, {
         type: NS.MSG.ERROR,
         error: '尚未填写 API 密钥',
@@ -287,7 +285,7 @@ importScripts(
             }
             return sendResponse(res);
           }
-          case 'wpt:frames': {
+          case NS.MSG.FRAMES: {
             // 顶层页面开始 / 还原 / 停止：转发给同一标签页的子框架（开始时先把脚本注入进去）
             const tabId = sender.tab && sender.tab.id;
             if (tabId == null || sender.frameId) return sendResponse({ ok: false });
@@ -298,16 +296,16 @@ importScripts(
                 injected = res.length;
               } catch (e) { injected = String(e && e.message || e); /* 个别框架不可注入（浏览器内部页、已销毁）不影响其余 */ }
             }
-            try { await chrome.tabs.sendMessage(tabId, { type: 'wpt:frame-cmd', action: msg.action, overrides: msg.overrides || null }); } catch (e) {}
+            try { await chrome.tabs.sendMessage(tabId, { type: NS.MSG.FRAME_CMD, action: msg.action, overrides: msg.overrides || null }); } catch (e) {}
             return sendResponse({ ok: true, injected: injected });
           }
-          case 'wpt:frame-status': {
+          case NS.MSG.FRAME_STATUS: {
             // 子框架上报翻译状态给顶层页面（用于 frameset / iframe 为主体的页面）
             const tabId = sender.tab && sender.tab.id;
             if (tabId == null || !sender.frameId) return sendResponse({ ok: false });
             try {
               await chrome.tabs.sendMessage(tabId, {
-                type: 'wpt:frame-status',
+                type: NS.MSG.FRAME_STATUS,
                 frameId: sender.frameId,
                 active: !!msg.active,
                 translated: msg.translated || 0
@@ -325,7 +323,7 @@ importScripts(
           case NS.MSG.TEST_CONNECTION: {
             const cur = await NS.settings.get();
             const s = Object.assign({}, cur, msg.settings || {});
-            if (!s.apiKey && !isLocalUrl(s.baseUrl)) {
+            if (!s.apiKey && !U.isLocalUrl(s.baseUrl)) {
               return sendResponse({ ok: false, error: '尚未填写 API 密钥' });
             }
             const ctrl = new AbortController();
@@ -340,7 +338,7 @@ importScripts(
               clearTimeout(timer);
             }
           }
-          case 'wpt:open-options':
+          case NS.MSG.OPEN_OPTIONS:
             try { await chrome.runtime.openOptionsPage(); } catch (e) {}
             return sendResponse({ ok: true });
           case NS.MSG.USAGE_RESET:

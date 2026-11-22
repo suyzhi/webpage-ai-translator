@@ -9,7 +9,7 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.TranslationCache) return;
   const U = NS.util;
 

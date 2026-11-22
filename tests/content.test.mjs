@@ -11,7 +11,15 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SHARED = ['src/shared/constants.js', 'src/shared/util.js', 'src/shared/settings.js'];
+const SHARED = ['src/shared/constants.js', 'src/shared/util.js', 'src/shared/site-rules.js', 'src/shared/settings.js'];
+const CONTENT = [
+  'src/content/toast.js',
+  'src/content/plaintext.js',
+  'src/content/frames.js',
+  'src/content/observer.js',
+  'src/content/render-queue.js',
+  'src/content/content.js'
+];
 const read = (f) => [fs.readFileSync(path.join(ROOT, f), 'utf8'), path.join(ROOT, f)];
 
 /* 计时器 unref，避免心跳 / 提示自动隐藏的定时器拖住测试进程 */
@@ -90,8 +98,7 @@ function loadPage({ host, settings, units }) {
     byViewportPriority: (u) => u,
     isHardSkip: () => false
   };
-  const [code, filename] = read('src/content/content.js');
-  vm.runInContext(code, ctx, { filename });
+  for (const f of CONTENT) { const [code, filename] = read(f); vm.runInContext(code, ctx, { filename }); }
 
   page.state = () => ctx.WPT.Content.state;
   page.send = (msg) => page.onMessage(msg, {}, () => {});

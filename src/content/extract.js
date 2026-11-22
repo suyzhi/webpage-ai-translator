@@ -11,7 +11,7 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.Extractor) return;
   const U = NS.util;
 
@@ -504,7 +504,9 @@
   }
 
   function collect(root, settings) {
-    const ctx = { units: [], settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [], hiddenEls: [] };
+    /** @type {WptUnitList} */
+    const units = [];
+    const ctx = { units: units, settings: settings || NS.DEFAULT_SETTINGS, seq: 0, shadowRoots: [], hiddenEls: [] };
     const start = root || document.body;
     if (!start) return [];
     let rootStyle = null;

@@ -25,7 +25,7 @@ const checks = [];
 const check = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail == null ? '' : String(detail) });
 
 const SOURCES = [
-  'src/shared/constants.js', 'src/shared/util.js', 'src/shared/settings.js',
+  'src/shared/constants.js', 'src/shared/util.js', 'src/shared/site-rules.js', 'src/shared/settings.js',
   'src/content/extract.js', 'src/content/render.js'
 ].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
 

@@ -4,13 +4,20 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.providers) return;
   const U = NS.util;
 
   const MODEL_ERR_RE = /model[^.]{0,60}(not exist|does not exist|not found|not supported|invalid|unknown)|supported (api )?model names|model_not_found|invalid model/i;
 
+  /**
+   * @param {number} status
+   * @param {string} detail
+   * @param {Headers} [headers]
+   * @returns {WptError}
+   */
   function makeError(status, detail, headers) {
+    /** @type {WptError} */
     const err = new Error('HTTP ' + status + (detail ? ': ' + U.truncate(detail, 400) : ''));
     err.status = status;
     err.detail = detail || '';
@@ -59,6 +66,7 @@
     } catch (e) {
       if (outerSignal && outerSignal.aborted) throw U.abortError();
       if (timedOut) {
+        /** @type {WptError} */
         const err = new Error('请求超时（' + Math.round(settings.timeoutMs / 1000) + ' 秒' + (stage === 'body' ? '，读取响应体' : '') + '）');
         err.name = 'TimeoutError';
         err.retryable = true;
@@ -66,6 +74,7 @@
         throw err;
       }
       if (U.isAbort(e)) throw e;
+      /** @type {WptError} */
       const err = new Error('网络错误：' + ((e && e.message) || String(e)));
       err.name = 'TypeError';
       err.retryable = true;
@@ -247,11 +256,13 @@
     // 只有思考过程、没有正文：推理模型（或思考耗尽了输出上限）。把思考当译文只会解析失败、反复重试烧 token，
     // 直接按致命错误停下并提示换模型。
     if ((typeof content !== 'string' || !content) && msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+      /** @type {WptError} */
       const err = new Error('模型只返回了思考过程、没有译文：请改用非推理模型（如 deepseek-flash），推理模型翻译费用高数倍');
       err.fatal = true;
       throw err;
     }
     if (typeof content !== 'string') {
+      /** @type {WptError} */
       const err = new Error('模型未返回文本内容（请检查模型名是否为对话模型）：' + U.truncate(JSON.stringify(data), 200));
       err.retryable = true;
       throw err;
@@ -279,6 +290,7 @@
     if (!res.ok) throw makeError(res.status, extractError(parsed.json, parsed.text), res.headers);
     const data = parsed.json;
     if (!data || !Array.isArray(data.content)) {
+      /** @type {WptError} */
       const err = new Error('Anthropic 返回格式异常：' + U.truncate(parsed.text, 200));
       err.retryable = true;
       throw err;
@@ -292,11 +304,13 @@
   /* meta（可选）：调用成功后写入 meta.usage = { input, output, cached } */
   async function call(settings, messages, signal, meta) {
     if (!settings.baseUrl) {
+      /** @type {WptError} */
       const err = new Error('尚未配置接口地址 (Base URL)');
       err.fatal = true;
       throw err;
     }
     if (!settings.model) {
+      /** @type {WptError} */
       const err = new Error('尚未配置模型名称');
       err.fatal = true;
       throw err;

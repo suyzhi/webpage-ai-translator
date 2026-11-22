@@ -7,7 +7,7 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.prompt) return;
 
   function targetName(settings) {

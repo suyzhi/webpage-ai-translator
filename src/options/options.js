@@ -2,7 +2,10 @@
 (function () {
   'use strict';
   const NS = globalThis.WPT;
+  /** @param {string} id @returns {any} */
   const $ = function (id) { return document.getElementById(id); };
+  /** @param {Event} e @param {string} sel @returns {HTMLElement | null} */
+  const closestEl = function (e, sel) { return e.target ? /** @type {HTMLElement | null} */ (/** @type {Element} */ (e.target).closest(sel)) : null; };
 
   const NUM_FIELDS = ['concurrency', 'batchChars', 'batchItems', 'firstBatchChars', 'maxRetries',
     'timeoutMs', 'minTextLength', 'temperature', 'cacheMaxEntries'];
@@ -164,7 +167,7 @@
     const v = Math.max(1, Math.min(32, Number(value) || 1));
     $('concurrency').value = v;
     $('concurrency').style.setProperty('--fill', ((v - 1) / 31 * 100) + '%');
-    $('concurrencyVal').textContent = v;
+    $('concurrencyVal').textContent = String(v);
     const chips = $('concPresets').querySelectorAll('.chip');
     for (let i = 0; i < chips.length; i++) {
       chips[i].setAttribute('aria-pressed', String(Number(chips[i].dataset.value) === v));
@@ -226,7 +229,7 @@
     }
 
     $('presets').addEventListener('click', function (e) {
-      const chip = e.target.closest('.chip');
+      const chip = closestEl(e, '.chip');
       if (!chip) return;
       const p = NS.PRESETS.filter(function (x) { return x.id === chip.dataset.id; })[0];
       if (!p) return;
@@ -240,13 +243,13 @@
     });
 
     $('displaySeg').addEventListener('click', function (e) {
-      const b = e.target.closest('button');
+      const b = closestEl(e, 'button');
       if (!b) return;
       setSeg('displaySeg', b.dataset.value);
       save({ displayMode: b.dataset.value }, true);
     });
     $('markSeg').addEventListener('click', function (e) {
-      const b = e.target.closest('button');
+      const b = closestEl(e, 'button');
       if (!b) return;
       setSeg('markSeg', b.dataset.value);
       save({ markStyle: b.dataset.value }, true);
@@ -257,7 +260,7 @@
       $(kind + 'Add').addEventListener('click', function () { addSiteRule(kind); });
       $(kind + 'Input').addEventListener('keydown', function (e) { if (e.key === 'Enter') addSiteRule(kind); });
       $(kind + 'List').addEventListener('click', async function (e) {
-        const b = e.target.closest('button[data-host]');
+        const b = closestEl(e, 'button[data-host]');
         if (!b) return;
         settings = await NS.settings.setSiteRule(b.dataset.host, null);
         renderSiteRules();
@@ -271,14 +274,14 @@
     });
 
     $('previewTheme').addEventListener('click', function (e) {
-      const b = e.target.closest('button');
+      const b = closestEl(e, 'button');
       if (!b) return;
       $('previewPage').setAttribute('data-theme', b.dataset.theme);
       this.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
     });
 
     $('concPresets').addEventListener('click', function (e) {
-      const chip = e.target.closest('.chip');
+      const chip = closestEl(e, '.chip');
       if (!chip) return;
       updateConc(chip.dataset.value);
       save({ concurrency: Number(chip.dataset.value) }, true);
@@ -371,20 +374,13 @@
     }
   }
 
-  function fmtTokens(n) {
-    n = n || 0;
-    if (n < 1000) return String(n);
-    if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'K';
-    return (n / 1e6).toFixed(2) + 'M';
-  }
-
   async function refreshUsage() {
     try {
       const got = await chrome.storage.local.get(NS.USAGE_KEY);
       const u = got[NS.USAGE_KEY];
       if (!u || !(u.input || u.output)) { $('usageStats').textContent = '累计 token 用量：暂无'; return; }
       const hit = u.input ? Math.round(u.cached / u.input * 100) : 0;
-      $('usageStats').textContent = '累计 token：输入 ' + fmtTokens(u.input) + '（缓存命中 ' + hit + '%）· 输出 ' + fmtTokens(u.output) +
+      $('usageStats').textContent = '累计 token：输入 ' + NS.util.fmtTokens(u.input) + '（缓存命中 ' + hit + '%）· 输出 ' + NS.util.fmtTokens(u.output) +
         ' · ' + u.requests + ' 次请求 · 自 ' + new Date(u.since).toLocaleDateString();
     } catch (e) {
       $('usageStats').textContent = '用量不可用';

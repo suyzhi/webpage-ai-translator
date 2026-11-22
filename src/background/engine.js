@@ -15,7 +15,7 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.Engine) return;
   const U = NS.util;
 
@@ -64,6 +64,7 @@
     this.workers = 0;
     this.adding = 0;
     this.ref = 0;
+    this._resolveIdle = null;
     this.idle = new Promise(function (resolve) { self._resolveIdle = resolve; });
   }
 
@@ -295,9 +296,11 @@
           else missing.push(it);
         }
         if (!missing.length) return;
-        lastErr = new Error('模型返回缺少 ' + missing.length + ' 个片段');
-        lastErr.retryable = true;
-        lastErr.malformed = true;
+        /** @type {WptError} */
+        const missErr = new Error('模型返回缺少 ' + missing.length + ' 个片段');
+        missErr.retryable = true;
+        missErr.malformed = true;
+        lastErr = missErr;
         pending = missing;
       } catch (err) {
         if (U.isAbort(err) || this.stopped) return;

@@ -3,14 +3,18 @@
  */
 (function () {
   'use strict';
-  const NS = globalThis.WPT || (globalThis.WPT = {});
+  const NS = globalThis.WPT || (globalThis.WPT = /** @type {any} */ ({}));
   if (NS.util) return;
-  const U = (NS.util = {});
-  NS.util = U;
+  const U = (NS.util = /** @type {any} */ ({}));
 
   const clamp = (n, lo, hi) => (n < lo ? lo : n > hi ? hi : n);
   U.clamp = clamp;
 
+  /**
+   * @param {number} ms
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<void>}
+   */
   U.sleep = function (ms, signal) {
     return new Promise((resolve, reject) => {
       if (signal && signal.aborted) return reject(abortError());
@@ -20,7 +24,9 @@
     });
   };
 
+  /** @param {string} [msg] @returns {WptError} */
   function abortError(msg) {
+    /** @type {WptError} */
     const e = new Error(msg || 'aborted');
     e.name = 'AbortError';
     e.aborted = true;
@@ -152,6 +158,7 @@
 
   /* ---------------- 语言 / 脚本判定 ---------------- */
 
+  /** @type {Array<[string, RegExp]>} */
   const SCRIPT_RANGES = [
     ['han', /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3005\u3007]/g],
     ['kana', /[\u3040-\u30ff\u31f0-\u31ff]/g],
@@ -375,142 +382,25 @@
     return batches;
   };
 
-  /* ---------------- 并发池 ---------------- */
-  U.runPool = async function (items, limit, worker, opts) {
-    const o = opts || {};
-    const arr = items || [];
-    if (!arr.length) return;
-    const width = Math.max(1, Math.min(Math.round(limit) || 1, arr.length));
-    let next = 0;
-    let stop = false;
-    let failure = null;
-
-    async function runner() {
-      while (!stop) {
-        if (o.signal && o.signal.aborted) { stop = true; return; }
-        const i = next++;
-        if (i >= arr.length) return;
-        try {
-          await worker(arr[i], i);
-        } catch (err) {
-          if (o.onError) o.onError(err, arr[i], i);
-          else { failure = err; stop = true; return; }
-        }
-      }
-    }
-
-    const runners = [];
-    for (let i = 0; i < width; i++) runners.push(runner());
-    await Promise.all(runners);
-    if (failure) throw failure;
-  };
-
-  /* ---------------- 共享限流器 ----------------
-   * 同一 API 端点 + 密钥的所有任务（多个标签页、同页多次增量）共用一个限流器：
-   *   - 并发上限 = 用户设置的并发数，而不是「每个标签页各自一份」；
-   *   - AIMD 自适应：遇到 429 并发减半并进入全局冷却（尊重 Retry-After），
-   *     之后每连续成功 limit 次再 +1，逐步恢复到上限，避免 429 风暴；
-   *   - FIFO 排队，保证先提交（视口优先）的批次先发出。
-   */
-  U.Limiter = class Limiter {
-    constructor(max) {
-      this.max = Math.max(1, Math.round(max) || 1);
-      this.limit = this.max;
-      this.active = 0;
-      this.queue = [];
-      this.cooldownUntil = 0;
-      this.okStreak = 0;
-    }
-    setMax(n) {
-      const m = Math.max(1, Math.round(n) || 1);
-      if (m === this.max) return;
-      // 调低立即生效；调高时若当前处于降速状态则保留降速，由成功次数逐步恢复
-      this.limit = this.limit >= this.max ? m : Math.min(this.limit, m);
-      this.max = m;
-      this._drain();
-    }
-    async acquire(signal) {
-      if (signal && signal.aborted) throw abortError();
-      if (this.active < this.limit && !this.queue.length) this.active++;
-      else {
-        await new Promise((resolve, reject) => {
-          const w = { resolve: resolve, reject: reject, onAbort: null, signal: signal };
-          if (signal) {
-            w.onAbort = () => {
-              const i = this.queue.indexOf(w);
-              if (i >= 0) this.queue.splice(i, 1);
-              reject(abortError());
-            };
-            signal.addEventListener('abort', w.onAbort, { once: true });
-          }
-          this.queue.push(w);
-        });
-      }
-      // 已占到名额；若处于 429 冷却期则持有名额等待，防止冷却结束瞬间的突发
-      const wait = this.cooldownUntil - Date.now();
-      if (wait > 0) {
-        try { await U.sleep(wait, signal); } catch (e) { this.release(); throw e; }
-      }
-    }
-    release() {
-      this.active = Math.max(0, this.active - 1);
-      this._drain();
-    }
-    _drain() {
-      while (this.active < this.limit && this.queue.length) {
-        const w = this.queue.shift();
-        this.active++;
-        if (w.signal && w.onAbort) w.signal.removeEventListener('abort', w.onAbort);
-        w.resolve();
-      }
-    }
-    onSuccess() {
-      if (this.limit >= this.max) { this.okStreak = 0; return; }
-      if (++this.okStreak >= this.limit) {
-        this.limit++;
-        this.okStreak = 0;
-        this._drain();
-      }
-    }
-    onRateLimit(retryAfterMs) {
-      this.limit = Math.max(1, Math.floor(this.limit / 2));
-      this.okStreak = 0;
-      const until = Date.now() + (retryAfterMs != null ? retryAfterMs : 1000);
-      if (until > this.cooldownUntil) this.cooldownUntil = until;
-    }
-  };
-
-  /* ---------------- LRU ---------------- */
-  U.LRUCache = class LRUCache {
-    constructor(max) {
-      this.max = Math.max(1, max || 100);
-      this.map = new Map();
-    }
-    get size() { return this.map.size; }
-    has(k) { return this.map.has(k); }
-    get(k) {
-      if (!this.map.has(k)) return undefined;
-      const v = this.map.get(k);
-      this.map.delete(k);
-      this.map.set(k, v);
-      return v;
-    }
-    set(k, v) {
-      if (this.map.has(k)) this.map.delete(k);
-      this.map.set(k, v);
-      while (this.map.size > this.max) this.map.delete(this.map.keys().next().value);
-    }
-    delete(k) { return this.map.delete(k); }
-    clear() { this.map.clear(); }
-    keys() { return Array.from(this.map.keys()); }
-  };
-
   /* URL 拼接：baseUrl 已含具体路径时直接使用，兼容各类自建网关 */
   U.joinUrl = function (base, suffix) {
     const b = String(base || '').trim().replace(/\/+$/, '');
     if (!b) return suffix;
     if (/\/(chat\/completions|messages|completions)$/i.test(b)) return b;
     return b + suffix;
+  };
+
+  /* 是否本地模型服务地址（Ollama / LM Studio 等，无需 API 密钥） */
+  U.isLocalUrl = function (url) {
+    return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/|$)/i.test(String(url || ''));
+  };
+
+  /* token 数量简洁格式化（例如 950 / 1.2K / 45K / 1.25M） */
+  U.fmtTokens = function (n) {
+    n = n || 0;
+    if (n < 1000) return String(n);
+    if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'K';
+    return (n / 1e6).toFixed(2) + 'M';
   };
 
   U.truncate = function (s, n) {
@@ -538,133 +428,5 @@
     if (err.name === 'TimeoutError' || /timeout/i.test(err.message || '')) return '请求超时，请检查网络或调大超时时间';
     if (err.name === 'TypeError') return '网络请求失败：无法连接 ' + (err.url || 'API 地址') + '（检查地址/代理/网络）';
     return U.truncate(err.message || String(err), 300);
-  };
-
-  /* ---------------- 站点规则 ----------------
-   * siteRules: { 'example.com': 'always' | 'never' }。
-   * 子域名继承父域名的规则，最具体的规则优先：a.b.example.com 先找 a.b.example.com，再找 b.example.com、example.com。
-   * 优先级：手动翻译 > 从不翻译 > 总是翻译 / 全局自动翻译开关。
-   */
-  const HOST_LABEL_RE = /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/;
-  const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
-  const ALL_PAGES = ['http://*/*', 'https://*/*'];
-  const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-
-  /* 用户输入 -> 纯主机名（小写、IDN 转 punycode）。协议/路径/端口/开头的 *. 会被去掉，其余无法识别的返回 '' */
-  U.normalizeHost = function (input) {
-    let s = String(input == null ? '' : input).trim().toLowerCase();
-    const scheme = /^(?:([a-z][a-z0-9+.-]*|\*):)?\/\//.exec(s);
-    if (scheme) {
-      if (scheme[1] && !/^(?:https?|\*)$/.test(scheme[1])) return '';   // 规则只作用于 http/https 网页
-      s = s.slice(scheme[0].length);                   // 协议
-    }
-    s = s.split(/[/?#\\]/)[0];                          // 路径 / 查询 / 片段
-    s = s.slice(s.lastIndexOf('@') + 1);                // 用户信息
-    if (s.charAt(0) === '[') return '';                 // IPv6 字面量不支持
-    s = s.replace(/:\d*$/, '');                         // 端口
-    s = s.replace(/^\*\./, '').replace(/\.+$/, '');     // *.example.com 等价于 example.com（子域名本就继承）
-    if (!s || s.indexOf('*') >= 0) return '';
-    try { s = new URL('http://' + s + '/').hostname; } catch (e) { return ''; }
-    if (s.length > 253) return '';
-    const labels = s.split('.');
-    for (let i = 0; i < labels.length; i++) if (!HOST_LABEL_RE.test(labels[i])) return '';
-    return s;
-  };
-
-  /* 清洗规则表：主机名规范化、丢弃无效项、去重（后者覆盖前者）、限制条数 */
-  U.normalizeSiteRules = function (raw) {
-    const out = {};
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
-    const max = NS.SITE_RULES_MAX || 500;
-    let n = 0;
-    const keys = Object.keys(raw);
-    for (let i = 0; i < keys.length; i++) {
-      const v = raw[keys[i]];
-      if (v !== 'always' && v !== 'never') continue;
-      const h = U.normalizeHost(keys[i]);
-      if (!h) continue;
-      if (!hasOwn(out, h)) {
-        if (n >= max) continue;
-        n++;
-      }
-      out[h] = v;
-    }
-    return out;
-  };
-
-  /* 找到对主机生效的规则：{ host: 规则所在的域名, rule }，无规则返回 null */
-  U.matchSiteRule = function (host, rules) {
-    if (!rules || typeof rules !== 'object') return null;
-    let h = String(host || '').toLowerCase().replace(/\.+$/, '');
-    const exactOnly = IPV4_RE.test(h);                  // IP 地址没有父域名
-    while (h) {
-      if (hasOwn(rules, h) && (rules[h] === 'always' || rules[h] === 'never')) return { host: h, rule: rules[h] };
-      const dot = h.indexOf('.');
-      if (exactOnly || dot < 0) break;
-      h = h.slice(dot + 1);
-    }
-    return null;
-  };
-
-  U.siteRuleFor = function (host, rules) {
-    const m = U.matchSiteRule(host, rules);
-    return m ? m.rule : null;
-  };
-
-  /* 内容脚本加载后是否自动开始翻译（手动翻译不经过这里，不受「从不翻译」限制） */
-  U.autoStartFor = function (settings, host) {
-    const s = settings || {};
-    const rule = U.siteRuleFor(host, s.siteRules);
-    if (rule === 'never') return false;
-    if (rule === 'always') return true;
-    return !!s.autoTranslate;
-  };
-
-  function hasRuleAbove(h, rules, value) {
-    for (let i = h.indexOf('.'); i >= 0; i = h.indexOf('.', i + 1)) {
-      if (rules[h.slice(i + 1)] === value) return true;
-    }
-    return false;
-  }
-
-  function hasRuleBelow(h, rules, value) {
-    const suffix = '.' + h;
-    for (const k in rules) {
-      if (rules[k] === value && k.length > suffix.length && k.slice(-suffix.length) === suffix) return true;
-    }
-    return false;
-  }
-
-  /* 主机名 -> 匹配模式；withSubdomains 时同时覆盖全部子域名（IP 地址没有子域名） */
-  function hostPatterns(h, withSubdomains) {
-    const out = ['*://' + h + '/*'];
-    if (withSubdomains && !IPV4_RE.test(h)) out.push('*://*.' + h + '/*');
-    return out;
-  }
-
-  /*
-   * 自动翻译内容脚本的注册参数 { matches, excludeMatches? }；无需注册时返回 null。
-   *   自动翻译开启：全部 http/https 页面，排除「从不翻译」的网站；
-   *   自动翻译关闭：只匹配「总是翻译」的网站（及其子域名），排除其中「从不翻译」的子域名。
-   * 「从不翻译」的域名下若还有「总是翻译」的子域名，只排除该域名本身，其余子域名交给内容脚本按规则判定。
-   * 规则先经 normalizeSiteRules 清洗，保证不会生成无效的匹配模式（一个无效模式会让整次注册失败）。
-   */
-  U.autoRegistrationFor = function (settings) {
-    const s = settings || {};
-    const auto = !!s.autoTranslate;
-    const rules = U.normalizeSiteRules(s.siteRules);
-    const matches = auto ? ALL_PAGES.slice() : [];
-    const exclude = [];
-    for (const h in rules) {
-      if (rules[h] === 'always') {
-        if (!auto) matches.push.apply(matches, hostPatterns(h, true));
-      } else if (auto || hasRuleAbove(h, rules, 'always')) {
-        exclude.push.apply(exclude, hostPatterns(h, !hasRuleBelow(h, rules, 'always')));
-      }
-    }
-    if (!matches.length) return null;
-    const reg = { matches: matches };
-    if (exclude.length) reg.excludeMatches = exclude;
-    return reg;
   };
 })();

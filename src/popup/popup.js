@@ -2,6 +2,8 @@
 (function () {
   'use strict';
   const NS = globalThis.WPT;
+  const U = NS.util;
+  /** @param {string} id @returns {any} */
   const $ = function (id) { return document.getElementById(id); };
 
   let tab = null;
@@ -19,8 +21,6 @@
     error: '出错'
   };
   const BUSY = { scanning: 1, translating: 1 };
-
-  function isLocal(url) { return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/i.test(String(url || '')); }
 
   function fillLanguages() {
     const sel = $('targetLang');
@@ -128,7 +128,7 @@
       return;
     }
     if (hasOutput) return retranslate();
-    if (settings && !settings.apiKey && !isLocal(settings.baseUrl)) {
+    if (settings && !settings.apiKey && !U.isLocalUrl(settings.baseUrl)) {
       $('noKey').classList.remove('hidden');
       return;
     }
@@ -171,7 +171,7 @@
     settings = await NS.settings.set(patch);
     dirty = true;
     $('modelLabel').textContent = modelText(settings);
-    $('noKey').classList.toggle('hidden', !!settings.apiKey || isLocal(settings.baseUrl));
+    $('noKey').classList.toggle('hidden', !!settings.apiKey || U.isLocalUrl(settings.baseUrl));
   }
 
   function modelText(s) {
@@ -224,7 +224,7 @@
     $('targetLang').value = settings.targetLang;
     setDisplay(settings.displayMode);
     $('modelLabel').textContent = modelText(settings);
-    $('noKey').classList.toggle('hidden', !!settings.apiKey || isLocal(settings.baseUrl));
+    $('noKey').classList.toggle('hidden', !!settings.apiKey || U.isLocalUrl(settings.baseUrl));
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     tab = tabs && tabs[0] ? tabs[0] : null;
@@ -272,21 +272,14 @@
   /* ---------------- token 用量 ---------------- */
   let totalUsage = null;
 
-  function fmtTokens(n) {
-    n = n || 0;
-    if (n < 1000) return String(n);
-    if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'K';
-    return (n / 1e6).toFixed(2) + 'M';
-  }
-
   function renderUsage() {
     const page = live && live.usage;
     const parts = [];
     if (page && (page.input || page.output)) {
       const hit = page.input ? Math.round(page.cached / page.input * 100) : 0;
-      parts.push('本页 ' + fmtTokens(page.input + page.output) + ' token' + (hit ? '（缓存命中 ' + hit + '%）' : ''));
+      parts.push('本页 ' + U.fmtTokens(page.input + page.output) + ' token' + (hit ? '（缓存命中 ' + hit + '%）' : ''));
     }
-    if (totalUsage && (totalUsage.input || totalUsage.output)) parts.push('累计 ' + fmtTokens(totalUsage.input + totalUsage.output));
+    if (totalUsage && (totalUsage.input || totalUsage.output)) parts.push('累计 ' + U.fmtTokens(totalUsage.input + totalUsage.output));
     $('usageLine').textContent = parts.join(' · ');
   }
 
@@ -313,7 +306,7 @@
     });
   });
   $('displaySeg').addEventListener('click', function (e) {
-    const btn = e.target.closest('button');
+    const btn = /** @type {HTMLElement | null} */ (e.target && /** @type {Element} */ (e.target).closest('button'));
     if (!btn) return;
     setDisplay(btn.dataset.value);
     save({ displayMode: btn.dataset.value }).then(function () {
@@ -330,7 +323,7 @@
   });
 
   $('siteSeg').addEventListener('click', function (e) {
-    const btn = e.target.closest('button');
+    const btn = /** @type {HTMLElement | null} */ (e.target && /** @type {Element} */ (e.target).closest('button'));
     if (!btn) return;
     setSiteRule(btn.dataset.value);
   });

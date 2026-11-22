@@ -22,6 +22,8 @@ function load(...files) {
 const WPT = load(
   'src/shared/constants.js',
   'src/shared/util.js',
+  'src/shared/site-rules.js',
+  'src/shared/concurrency.js',
   'src/shared/prompt.js',
   'src/shared/settings.js',
   'src/background/providers.js'
@@ -581,4 +583,29 @@ test('hasTargetScript：校验非拉丁目标语言的书写系统，避免错�
   assert.equal(U.hasTargetScript('Hello world', 'ko'), false);
   assert.equal(U.hasTargetScript('안녕하세요', 'ko'), true);
   assert.equal(U.hasTargetScript('Bonjour le monde', 'en'), true, '拉丁语系目标不做脚本排除');
+});
+
+test('isLocalUrl / fmtTokens：共享辅助函数', () => {
+  for (const ok of ['http://localhost:11434/v1', 'http://127.0.0.1:1234/v1', 'http://0.0.0.0:8000', 'http://[::1]:8080/v1', 'https://localhost']) {
+    assert.equal(U.isLocalUrl(ok), true, ok);
+  }
+  for (const bad of ['https://api.deepseek.com/v1', 'http://localhost.evil.com/v1', 'http://127.0.0.1.evil.com', '', null]) {
+    assert.equal(U.isLocalUrl(bad), false, String(bad));
+  }
+  assert.equal(U.fmtTokens(0), '0');
+  assert.equal(U.fmtTokens(999), '999');
+  assert.equal(U.fmtTokens(1250), '1.3K');
+  assert.equal(U.fmtTokens(12500), '13K');
+  assert.equal(U.fmtTokens(1500000), '1.50M');
+});
+
+test('模块拆分与消息常量：siteRules / concurrency / MSG 完整暴露', () => {
+  assert.equal(WPT.siteRules.normalizeHost, U.normalizeHost);
+  assert.equal(WPT.siteRules.autoRegistrationFor, U.autoRegistrationFor);
+  assert.equal(WPT.concurrency.runPool, U.runPool);
+  assert.equal(WPT.concurrency.Limiter, U.Limiter);
+  assert.equal(WPT.concurrency.LRUCache, U.LRUCache);
+  for (const k of ['STATE', 'STATE_CHANGED', 'FRAMES', 'FRAME_CMD', 'FRAME_STATUS', 'OPEN_OPTIONS']) {
+    assert.match(WPT.MSG[k], /^wpt:/, 'MSG.' + k);
+  }
 });

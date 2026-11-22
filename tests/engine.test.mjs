@@ -74,6 +74,8 @@ function load(...files) {
 const WPT = load(
   'src/shared/constants.js',
   'src/shared/util.js',
+  'src/shared/site-rules.js',
+  'src/shared/concurrency.js',
   'src/shared/settings.js',
   'src/shared/prompt.js',
   'src/background/providers.js',

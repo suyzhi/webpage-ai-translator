@@ -26,7 +26,7 @@ const TEXT_DIR = path.join(ROOT, '.cache', 'eval', 'texts');
 const MAX_REAL_SEGMENTS = 400;          // 真实模式每站最多翻这么多段，控制花费
 
 globalThis.importScripts = function () {};
-for (const f of ['src/shared/constants.js', 'src/shared/util.js', 'src/shared/settings.js', 'src/shared/prompt.js',
+for (const f of ['src/shared/constants.js', 'src/shared/util.js', 'src/shared/site-rules.js', 'src/shared/concurrency.js', 'src/shared/settings.js', 'src/shared/prompt.js',
   'src/background/providers.js', 'src/background/engine.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), { filename: f });
 }

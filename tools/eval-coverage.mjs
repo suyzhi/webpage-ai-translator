@@ -26,7 +26,7 @@ const GLOBAL_DEADLINE = Date.now() + 12 * 60000;
 const OUT_DIR = path.join(ROOT, '.cache', 'eval');
 
 const SOURCES = [
-  'src/shared/constants.js', 'src/shared/util.js', 'src/shared/settings.js',
+  'src/shared/constants.js', 'src/shared/util.js', 'src/shared/site-rules.js', 'src/shared/settings.js',
   'src/content/extract.js', 'tools/eval/measure.js'
 ].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
 

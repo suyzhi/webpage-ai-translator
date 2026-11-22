@@ -24,7 +24,7 @@ globalThis.chrome = { storage: { local: {
   remove: async (keys) => { for (const k of keysOf(keys)) store.delete(k); }
 } } };
 
-for (const f of ['src/shared/constants.js', 'src/shared/util.js', 'src/background/cache.js']) {
+for (const f of ['src/shared/constants.js', 'src/shared/util.js', 'src/shared/concurrency.js', 'src/background/cache.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), { filename: f });
 }
 const U = globalThis.WPT.util;
