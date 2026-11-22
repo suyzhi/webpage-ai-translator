@@ -24,17 +24,17 @@
 
   const STYLE =
     ':host{all:initial}' +
-    '.box{--fg:#111827;--sub:#6b7280;--bg:rgba(255,255,255,.9);--line:rgba(15,23,42,.08);--track:rgba(15,23,42,.08);' +
-    '--accent:#6366f1;--ok:#10b981;--err:#ef4444;--btn:rgba(15,23,42,.05);--btn-h:rgba(15,23,42,.1);' +
-    'font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;' +
-    'color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:14px;' +
-    'box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px -8px rgba(0,0,0,.22);' +
-    '-webkit-backdrop-filter:blur(14px) saturate(1.6);backdrop-filter:blur(14px) saturate(1.6);' +
-    'min-width:220px;max-width:340px;overflow:hidden;pointer-events:auto;' +
-    'opacity:0;transform:translateY(10px) scale(.98);transform-origin:100% 100%;' +
-    'transition:opacity .22s ease,transform .32s cubic-bezier(.2,.8,.2,1)}' +
-    '@media (prefers-color-scheme:dark){.box{--fg:#f3f4f6;--sub:#9ca3af;--bg:rgba(24,24,27,.88);--line:rgba(255,255,255,.1);' +
-    '--track:rgba(255,255,255,.12);--accent:#818cf8;--ok:#34d399;--err:#f87171;--btn:rgba(255,255,255,.08);--btn-h:rgba(255,255,255,.16)}}' +
+    '.box{--fg:#181613;--sub:#726c62;--bg:rgba(250,248,243,.95);--line:rgba(24,22,19,.12);--track:rgba(24,22,19,.08);' +
+    '--accent:#c43d20;--ok:#246a4e;--err:#b83226;--btn:rgba(24,22,19,.06);--btn-h:rgba(24,22,19,.12);' +
+    'font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;' +
+    'color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;' +
+    'box-shadow:0 1px 2px rgba(24,22,19,.05),0 10px 26px -10px rgba(24,22,19,.20);' +
+    '-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);' +
+    'min-width:208px;max-width:328px;overflow:hidden;pointer-events:auto;' +
+    'opacity:0;transform:translateY(6px);transform-origin:100% 100%;' +
+    'transition:opacity .18s ease,transform .24s cubic-bezier(.2,.8,.2,1)}' +
+    '@media (prefers-color-scheme:dark){.box{--fg:#eeeae1;--sub:#9c9589;--bg:rgba(23,22,19,.94);--line:rgba(238,234,225,.12);' +
+    '--track:rgba(238,234,225,.10);--accent:#df5e3e;--ok:#4da681;--err:#e66b61;--btn:rgba(238,234,225,.08);--btn-h:rgba(238,234,225,.15)}}' +
     '.box.show{opacity:1;transform:none}' +
     '.main{display:flex;align-items:center;gap:10px;padding:10px 10px 10px 12px}' +
     '.ic{width:16px;height:16px;flex:0 0 auto;position:relative}' +

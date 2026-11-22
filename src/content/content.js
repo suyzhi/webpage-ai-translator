@@ -297,13 +297,13 @@
         if (frames.isActive()) {
           setStatus(NS.STATUS.DONE);
           observer.start();
-          if (!state.autoRun) ui.show('翻译完成', { kind: 'ok', sub: '已翻译嵌入框架中的内容', actions: [{ label: '还原', run: restore }] });
+          ui.hide();
           return;
         }
       }
       setStatus(state.nodes.size ? NS.STATUS.DONE : NS.STATUS.IDLE);
       if (state.nodes.size) {
-        if (!state.autoRun) ui.show('译文已是最新', { kind: 'ok' });
+        ui.hide();
       } else {
         // 自动翻译时静默结束：已是目标语言的网站不应每次打开都弹出错误提示
         if (!state.autoRun) ui.show('未找到可翻译的内容', { kind: 'err', sub: '页面可能是图片、代码或已是目标语言' });
@@ -710,26 +710,18 @@
     frames.reportStatus(true);
     stopHeartbeat();
     renderQueue.scheduleRelayout();
-    // 增量翻译（滚动加载、实时更新）静默完成，只有用户发起的翻译才提示
+    // 增量翻译（滚动加载、实时更新）静默完成；全部成功时直接收起进度浮层，不再弹出「翻译完成」窗口
     if (!state.announce) return;
     state.announce = false;
-    const stats = state.lastStats || {};
     const failedTotal = state.failedIds.size;
     if (failedTotal > 0) {
-      ui.show('翻译完成，' + failedTotal + ' 段失败', {
+      ui.show('部分内容翻译失败（' + failedTotal + ' 段）', {
         kind: 'err', duration: 0,
         sub: state.error || '网络或限流导致，可重试失败段落',
         actions: [{ label: '重试', run: retryFailed }]
       });
     } else {
-      const secs = stats.elapsedMs ? (stats.elapsedMs / 1000).toFixed(1) + 's' : '';
-      const cached = state.cached ? ' · 缓存 ' + state.cached + ' 段' : '';
-      const lazy = state.lazy.size ? ' · 其余内容滚动到时再翻译' : '';
-      ui.show('翻译完成', {
-        kind: 'ok',
-        sub: ('共 ' + state.total + ' 段' + cached + (secs ? ' · ' + secs : '') + lazy).trim(),
-        actions: [{ label: '还原', run: restore }]
-      });
+      ui.hide();
     }
   }
 

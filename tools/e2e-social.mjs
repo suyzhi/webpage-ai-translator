@@ -122,10 +122,10 @@ async function main() {
       check('真实页面：渲染出译文', st.translated > 0, 'translated=' + st.translated);
     }
 
-    /* ---- 3. 页面持续变化时不反复弹窗、不产生请求 ---- */
+    /* ---- 3. 翻译完成不弹完成窗；页面持续变化时不反复弹窗、不产生请求 ---- */
     const toasts1 = await cdp.evalIn(page, 'window.__toasts.slice()');
     const doneShows = toasts1.filter((t) => /翻译完成/.test(t.text)).length;
-    check('「翻译完成」只提示一次', doneShows === 1, JSON.stringify(toasts1.map((t) => t.text)));
+    check('翻译完成后不弹出右下角完成窗', doneShows === 0, JSON.stringify(toasts1.map((t) => t.text)));
     const reqBefore = (await httpJson(MOCK + '/__stats')).requests;
     const t0 = Date.now();
     log('空闲观察 ' + IDLE_MS / 1000 + ' 秒（页面持续跳动 / 重渲染）…');
